@@ -35,9 +35,9 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 8
+N_BLOCKS = 12
 PATCH_SIZE = 2
-N_WINDOW = 30
+N_WINDOW = 15
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -48,8 +48,8 @@ T_NOISE = 1000        # noise schedule resolution
 
 # Training
 BATCH_SIZE = 16
-LR1 = 0.02            # Muon lr for body params (>=2D)
-LR2 = 3e-4            # Adam lr for gains/biases/embeddings
+LR1 = 0.03            # Muon lr for body params (>=2D), increased for more steps
+LR2 = 5e-4            # Adam lr for gains/biases/embeddings, increased for more steps
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 50
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 2000
+    max_steps = 1800
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---

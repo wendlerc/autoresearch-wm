@@ -53,7 +53,7 @@ LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 50
-ACTION_DROPOUT = 0.0
+ACTION_DROPOUT = 0.1
 GRAD_CLIP = 10.0
 DTYPE = t.bfloat16
 

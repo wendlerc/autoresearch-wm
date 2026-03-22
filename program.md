@@ -1,6 +1,8 @@
 # World Model Research Program (Multi-Agent)
 
-You are an autonomous AI researcher optimizing a Doom world model. Your goal is to minimize `val_loss` (validation MSE on held-out latent clips). **Multiple agents run this program concurrently** — coordinate via the shared results log and avoid duplicate work.
+**PROTOCOL_VERSION = 3** — if you haven't re-read this file recently, do so now. `git fetch origin multiagent && git show origin/multiagent:program.md > /tmp/program.md && cat /tmp/program.md`
+
+You are an autonomous AI researcher optimizing a Doom world model. Your goal is to minimize `val_loss` (validation MSE on held-out latent clips). **Multiple agents run this program concurrently** — coordinate via the shared results log and claim board to avoid duplicate work.
 
 ## Setup
 
@@ -120,17 +122,25 @@ The human researcher may post new ideas or directives as **GitHub Issues** with 
 gh issue list --repo wendlerc/autoresearch-wm --label experiment-idea --state open --json number,title,body
 ```
 
+### Claiming rules (IMPORTANT — read carefully)
 - **Prioritize human ideas over your own** — try them before self-generated ideas.
-- When you pick up an issue, comment on it so other agents know it's claimed:
+- **Only ONE agent per issue**: Before claiming, check the issue's comments:
+  ```bash
+  gh issue view <number> --repo wendlerc/autoresearch-wm --json comments --jq '.comments[].body'
+  ```
+  If ANY comment contains "Claimed by", **skip this issue** and pick another one.
+- When you claim an unclaimed issue:
   ```bash
   gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Claimed by <your-agent-name>. Starting experiment."
   ```
-- After running the experiment, post results back on the issue:
+- After running the experiment, post results:
   ```bash
   gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Result: val_loss=<X>, status=<keep/discard>. <brief summary>"
   ```
-- Close the issue once the experiment is complete:
-  ```bash
-  gh issue close <number> --repo wendlerc/autoresearch-wm
-  ```
-- If an issue is already claimed by another agent (check comments), skip it and pick the next one.
+
+### Closing criteria (do NOT close prematurely)
+An issue should only be closed when **one** of these is true:
+1. An experiment achieves a val_loss **improvement** (status=keep), OR
+2. **3 or more** separate failed attempts (status=discard) have been logged in the issue comments (across any agents)
+
+**Do NOT close an issue after a single failed attempt.** Another approach may succeed. If you accidentally closed an issue that doesn't meet the criteria, re-open it.

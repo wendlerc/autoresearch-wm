@@ -47,7 +47,7 @@ EXPANSION = 4
 T_NOISE = 1000        # noise schedule resolution
 
 # Training
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 2500
+    max_steps = 4000
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---

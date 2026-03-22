@@ -37,7 +37,7 @@ D_MODEL = 384
 N_HEADS = 24
 N_BLOCKS = 12
 PATCH_SIZE = 2
-N_WINDOW = 15
+N_WINDOW = 30
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -47,7 +47,7 @@ EXPANSION = 4
 T_NOISE = 1000        # noise schedule resolution
 
 # Training
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
@@ -384,10 +384,14 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.6):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
-    progress = float(step - warmup_steps) / float(max(1, max_steps - warmup_steps))
+    post_warmup = max_steps - warmup_steps
+    constant_end = warmup_steps + int(constant_fraction * post_warmup)
+    if step < constant_end:
+        return 1.0
+    progress = float(step - constant_end) / float(max(1, max_steps - constant_end))
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
@@ -613,9 +617,8 @@ if __name__ == "__main__":
             x_t = frames - ts[:, :, None, None, None] * vel_true
             vel_pred = model(x_t, actions, ts)
             # Min-SNR loss weighting (gamma=5): downweight easy (clean) samples
-            # SNR(t) = (1-t)^2 / t^2, weight = min(SNR, gamma) / SNR
             snr = ((1 - ts.double()) / (ts.double() + 1e-6)) ** 2
-            weights = t.clamp(5.0 / snr, max=1.0)  # [B, T]
+            weights = t.clamp(5.0 / snr, max=1.0)
             per_pixel_loss = (vel_pred.double() - vel_true.double()) ** 2
             loss = (weights[:, :, None, None, None] * per_pixel_loss).mean()
 

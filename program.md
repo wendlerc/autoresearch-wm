@@ -8,7 +8,13 @@ You are an autonomous AI researcher optimizing a Doom world model. Your goal is 
 2. Read `train.py` to understand the current architecture and training setup
 3. Verify data exists: `ls ~/.cache/autoresearch-wm/data/latent-*.tar`
    - If not, run: `uv run prepare.py` (only one agent needs to do this)
-4. Read the shared results log to see what has already been tried
+4. Read the shared results log and claim board:
+   ```bash
+   REPO_ROOT="$(git worktree list | head -1 | awk '{print $1}')"
+   cat "$REPO_ROOT/results/results.tsv"
+   cat "$REPO_ROOT/results/claims.tsv"
+   ```
+5. **Skip the baseline if it already exists**: If results.tsv already has entries, do NOT re-run unmodified train.py. Instead, find the best `val_loss` entry, check out or cherry-pick that commit's train.py into your worktree, and start improving from there.
 
 ## Rules
 
@@ -34,27 +40,59 @@ All agents log to a single shared file: `results/results.tsv` in the **main repo
 - `status`: `keep` (improvement over your previous best), `discard` (regression), or `crash`
 - **Read the log before each experiment** to see what others have tried and their results.
 
+## Claim board
+
+Before starting any experiment, **claim it** so other agents don't try the same thing. The claim board is at `results/claims.tsv` in the main repo root.
+
+```
+# Format: agent \t timestamp \t base_commit \t status \t description
+```
+
+**Before each experiment:**
+```bash
+REPO_ROOT="$(git worktree list | head -1 | awk '{print $1}')"
+CLAIMS_FILE="$REPO_ROOT/results/claims.tsv"
+BASE_COMMIT=$(git rev-parse --short HEAD)
+flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_COMMIT"'\tstarted\tDESCRIPTION" >> "'"$CLAIMS_FILE"'"'
+```
+
+**After each experiment:**
+```bash
+flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_COMMIT"'\tdone\tDESCRIPTION" >> "'"$CLAIMS_FILE"'"'
+```
+
+- Always read claims.tsv before picking an idea — if someone has `started` but not `done` for an idea, **don't try the same thing**.
+- `base_commit` shows which commit is being improved upon, so you can see the lineage of experiments.
+
 ## Coordination protocol
 
-1. **Before starting an experiment**, read `results/results.tsv` from the main repo root to check:
-   - What ideas have already been tried (avoid duplicates)
+1. **Before starting an experiment**, read both `results/results.tsv` and `results/claims.tsv` to check:
+   - What ideas have already been tried or are in-flight (avoid duplicates)
    - What the current best `val_loss` is across all agents
+   - What base commit others are building on
 2. **Adopt winning ideas**: If another agent found an improvement, cherry-pick or replicate their changes in your worktree before continuing your own exploration.
    - Use `git log <other-agent-branch>` and `git show <commit>` to inspect their changes.
-3. **Diversify**: If you see another agent is exploring learning rates, try architecture changes instead (and vice versa). Spread out across the idea space.
+3. **Diversify**: If you see another agent is exploring learning rates (check claims.tsv), try architecture changes instead. Spread out across the idea space.
 4. **Don't block on others**: If you can't read another agent's state, just proceed with your own plan.
 
 ## Experiment loop
 
-1. Read the shared results log: `cat "$(git worktree list | head -1 | awk '{print $1}')"/results/results.tsv`
-2. Pick a change that **hasn't been tried** and is likely to help
-3. Modify `train.py` in your worktree
-4. Commit with a descriptive message (include your agent name in the commit)
-5. Run: `uv run train.py 2>&1 | tee run.log`
-6. Extract results: `grep "^val_loss:" run.log`
-7. Log to the shared results file using `flock` (see above)
-8. If `keep`: continue building on this. If `discard`: `git revert HEAD` and try something else.
-9. Repeat indefinitely.
+1. Read **both** shared logs:
+   ```bash
+   REPO_ROOT="$(git worktree list | head -1 | awk '{print $1}')"
+   cat "$REPO_ROOT/results/results.tsv"
+   cat "$REPO_ROOT/results/claims.tsv"
+   ```
+2. Pick a change that **hasn't been tried AND isn't currently claimed** by another agent
+3. **Claim it** by appending to `results/claims.tsv` with status `started` (see Claim board section)
+4. Modify `train.py` in your worktree
+5. Commit with a descriptive message (include your agent name in the commit)
+6. Run: `uv run train.py 2>&1 | tee run.log`
+7. Extract results: `grep "^val_loss:" run.log`
+8. Log to `results/results.tsv` using `flock` (see Shared results log section)
+9. Mark claim as `done` in `results/claims.tsv`
+10. If `keep`: continue building on this. If `discard`: `git revert HEAD` and try something else.
+11. Repeat indefinitely.
 
 ## Ideas to explore
 

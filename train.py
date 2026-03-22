@@ -53,7 +53,7 @@ LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 50
-ACTION_DROPOUT = 0.2
+ACTION_DROPOUT = 0.1
 GRAD_CLIP = 10.0
 DTYPE = t.bfloat16
 
@@ -616,11 +616,7 @@ if __name__ == "__main__":
             vel_true = frames - z
             x_t = frames - ts[:, :, None, None, None] * vel_true
             vel_pred = model(x_t, actions, ts)
-            # Min-SNR loss weighting (gamma=5): downweight easy (clean) samples
-            snr = ((1 - ts.double()) / (ts.double() + 1e-6)) ** 2
-            weights = t.clamp(5.0 / snr, max=1.0)
-            per_pixel_loss = (vel_pred.double() - vel_true.double()) ** 2
-            loss = (weights[:, :, None, None, None] * per_pixel_loss).mean()
+            loss = F.mse_loss(vel_pred.double(), vel_true.double())
 
         loss.backward()
         t.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)

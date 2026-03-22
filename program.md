@@ -72,3 +72,27 @@ Split these across agents — check the results log to see what's already covere
 - Loss function variants
 - EMA / weight averaging
 - Gradient accumulation
+
+## Human-supplied ideas (GitHub Issues)
+
+The human researcher may post new ideas or directives as **GitHub Issues** with the label `experiment-idea`.
+
+**At the start of each experiment loop iteration**, check for open issues:
+```bash
+gh issue list --repo wendlerc/autoresearch-wm --label experiment-idea --state open --json number,title,body
+```
+
+- **Prioritize human ideas over your own** — try them before self-generated ideas.
+- When you pick up an issue, comment on it so other agents know it's claimed:
+  ```bash
+  gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Claimed by <your-agent-name>. Starting experiment."
+  ```
+- After running the experiment, post results back on the issue:
+  ```bash
+  gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Result: val_loss=<X>, status=<keep/discard>. <brief summary>"
+  ```
+- Close the issue once the experiment is complete:
+  ```bash
+  gh issue close <number> --repo wendlerc/autoresearch-wm
+  ```
+- If an issue is already claimed by another agent (check comments), skip it and pick the next one.

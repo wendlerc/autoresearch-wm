@@ -37,7 +37,7 @@ D_MODEL = 384
 N_HEADS = 24
 N_BLOCKS = 12
 PATCH_SIZE = 2
-N_WINDOW = 15
+N_WINDOW = 30
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -384,10 +384,14 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.6):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
-    progress = float(step - warmup_steps) / float(max(1, max_steps - warmup_steps))
+    post_warmup = max_steps - warmup_steps
+    constant_end = warmup_steps + int(constant_fraction * post_warmup)
+    if step < constant_end:
+        return 1.0
+    progress = float(step - constant_end) / float(max(1, max_steps - constant_end))
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
@@ -573,7 +577,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 4000
+    max_steps = 2500
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---

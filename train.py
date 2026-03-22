@@ -35,9 +35,9 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 8
+N_BLOCKS = 12
 PATCH_SIZE = 2
-N_WINDOW = 30
+N_WINDOW = 15
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 2000
+    max_steps = 2500
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---
@@ -612,7 +612,12 @@ if __name__ == "__main__":
             vel_true = frames - z
             x_t = frames - ts[:, :, None, None, None] * vel_true
             vel_pred = model(x_t, actions, ts)
-            loss = F.mse_loss(vel_pred.double(), vel_true.double())
+            # Min-SNR loss weighting (gamma=5): downweight easy (clean) samples
+            # SNR(t) = (1-t)^2 / t^2, weight = min(SNR, gamma) / SNR
+            snr = ((1 - ts.double()) / (ts.double() + 1e-6)) ** 2
+            weights = t.clamp(5.0 / snr, max=1.0)  # [B, T]
+            per_pixel_loss = (vel_pred.double() - vel_true.double()) ** 2
+            loss = (weights[:, :, None, None, None] * per_pixel_loss).mean()
 
         loss.backward()
         t.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)

@@ -503,13 +503,22 @@ def iterate_doom(loader):
 # Validation
 # =========================================================================
 
+VAL_BATCH_SIZE = 16    # fixed, do NOT derive from BATCH_SIZE
+VAL_N_BATCHES = 20     # fixed number of batches for val
+VAL_SEED = 42          # deterministic noise for reproducible val
+
 @t.no_grad()
 @t._dynamo.disable
-def compute_val_loss(model, val_loader, device, dtype, n_batches=20):
+def compute_val_loss(model, val_loader, device, dtype):
+    """Deterministic val loss: fixed batch size, fixed noise seed, fixed n_batches."""
     model.eval()
+    rng_state = t.random.get_rng_state()
+    cuda_rng_state = t.cuda.get_rng_state()
+    t.manual_seed(VAL_SEED)
+    t.cuda.manual_seed(VAL_SEED)
     losses = []
     val_iter = iterate_doom(val_loader)
-    for _ in range(n_batches):
+    for _ in range(VAL_N_BATCHES):
         try:
             frames, actions = next(val_iter)
         except StopIteration:
@@ -525,6 +534,9 @@ def compute_val_loss(model, val_loader, device, dtype, n_batches=20):
             vel_pred = model(x_t, actions, ts)
             loss = F.mse_loss(vel_pred.double(), vel_true.double())
         losses.append(loss.item())
+    # Restore RNG state so val doesn't affect training
+    t.random.set_rng_state(rng_state)
+    t.cuda.set_rng_state(cuda_rng_state)
     model.train()
     return sum(losses) / len(losses)
 
@@ -544,12 +556,13 @@ if __name__ == "__main__":
     shard_paths = sorted(Path(DATA_DIR).glob("latent-*.tar"))
     assert len(shard_paths) > 0, f"No shards in {DATA_DIR}. Run: python prepare.py"
     shard_urls = [str(p) for p in shard_paths]
+    assert len(shard_urls) >= 2, f"Need at least 2 shards (got {len(shard_urls)}). Run: python prepare.py"
     val_urls = [shard_urls[-1]]
-    train_urls = shard_urls[:-1] if len(shard_urls) > 1 else shard_urls
+    train_urls = shard_urls[:-1]  # strictly disjoint from val
 
     print(f"Train shards: {len(train_urls)}, Val shards: {len(val_urls)}")
     train_loader = get_doom_loader(train_urls, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS)
-    val_loader = get_doom_loader(val_urls, batch_size=max(4, BATCH_SIZE // 4), num_workers=2)
+    val_loader = get_doom_loader(val_urls, batch_size=VAL_BATCH_SIZE, num_workers=2)
 
     # --- Model ---
     model = CausalDit().to(device).to(DTYPE)
@@ -617,7 +630,7 @@ if __name__ == "__main__":
     # --- Validation (outside time budget) ---
     print("Computing validation loss...")
     t.cuda.empty_cache()
-    val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE, n_batches=20)
+    val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE)
     total_seconds = time.time() - t0_setup
     peak_vram = t.cuda.max_memory_allocated() / 1e6
 

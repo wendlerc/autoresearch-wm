@@ -340,9 +340,7 @@ class CausalDit(nn.Module):
         self.action_emb = Doom1P(D_MODEL)
         self.registers = nn.Parameter(t.randn(N_REGISTERS, D_MODEL) * 1 / D_MODEL ** 0.5)
         self.time_emb = NumericEncoding(dim=D_MODEL, n_max=T_NOISE)
-        self.time_emb_mixer = nn.Sequential(
-            nn.Linear(D_MODEL, D_MODEL), nn.SiLU(), nn.Linear(D_MODEL, D_MODEL)
-        )
+        self.time_emb_mixer = nn.Linear(D_MODEL, D_MODEL)
         self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(D_MODEL, 2 * D_MODEL, bias=True))
         self.mask = create_block_mask(
             create_block_causal_mask_mod(self.toks_per_frame),

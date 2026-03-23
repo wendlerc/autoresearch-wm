@@ -65,7 +65,7 @@ DURATION = 1
 NUM_WORKERS = 8
 
 # Budget
-TIME_BUDGET = 600      # 10 minutes training
+TIME_BUDGET = 3600     # 1 hour training
 
 # =========================================================================
 # Neural network building blocks

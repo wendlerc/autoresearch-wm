@@ -21,7 +21,7 @@ You are an autonomous AI researcher optimizing a Doom world model. Your goal is 
 ## Rules
 
 - **You may only modify `train.py`** in your own worktree. Do not modify `prepare.py` or dependencies.
-- The training budget is **10 minutes** (600 seconds). Exceeding this means failure.
+- The training budget is **1 hour** (3600 seconds). Exceeding this means failure.
 - Validation runs after training and does not count toward the budget.
 - Each experiment must produce a structured output block ending with `val_loss:` and other metrics.
 
@@ -122,25 +122,15 @@ The human researcher may post new ideas or directives as **GitHub Issues** with 
 gh issue list --repo wendlerc/autoresearch-wm --label experiment-idea --state open --json number,title,body
 ```
 
-### Claiming rules (IMPORTANT — read carefully)
+### Claiming rules
 - **Prioritize human ideas over your own** — try them before self-generated ideas.
-- **Only ONE agent per issue**: Before claiming, check the issue's comments:
+- **Any open issue is fair game** — even if other agents have already tried it and failed. Previous comments show what was attempted; try a **different approach** to the same idea.
+- When you pick up an issue, comment what specific approach you're taking:
   ```bash
-  gh issue view <number> --repo wendlerc/autoresearch-wm --json comments --jq '.comments[].body'
-  ```
-  If ANY comment contains "Claimed by", **skip this issue** and pick another one.
-- When you claim an unclaimed issue:
-  ```bash
-  gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Claimed by <your-agent-name>. Starting experiment."
+  gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Agent <name>: trying <specific approach>."
   ```
 - After running the experiment, post results:
   ```bash
-  gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Result: val_loss=<X>, status=<keep/discard>. <brief summary>"
+  gh issue comment <number> --repo wendlerc/autoresearch-wm --body "Agent <name> result: val_loss=<X>, status=<keep/discard>. <brief summary>"
   ```
-
-### Closing criteria (do NOT close prematurely)
-An issue should only be closed when **one** of these is true:
-1. An experiment achieves a val_loss **improvement** (status=keep), OR
-2. **3 or more** separate failed attempts (status=discard) have been logged in the issue comments (across any agents)
-
-**Do NOT close an issue after a single failed attempt.** Another approach may succeed. If you accidentally closed an issue that doesn't meet the criteria, re-open it.
+- **Do NOT close issues** — only the human researcher closes them.

@@ -49,7 +49,7 @@ T_NOISE = 1000        # noise schedule resolution
 # Training
 BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
-LR2 = 3e-4            # Adam lr for gains/biases/embeddings
+LR2 = 4e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 30
@@ -588,7 +588,6 @@ if __name__ == "__main__":
     t0_setup = time.time()
     t0_train = time.time()
 
-    # SWA: collect checkpoints during last 30% of training
     SWA_START_FRAC = 0.7
     SWA_INTERVAL = 500
     swa_states = []
@@ -615,7 +614,7 @@ if __name__ == "__main__":
 
         frames = frames[:, :N_WINDOW].to(device).to(DTYPE)
         actions = actions[:, :N_WINDOW].to(device)
-        ts = t.rand(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE)
+        ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
 
         with t.autocast(device_type="cuda", dtype=DTYPE):
             z = t.randn_like(frames)

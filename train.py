@@ -35,9 +35,9 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 5
+N_BLOCKS = 12
 PATCH_SIZE = 2
-N_WINDOW = 15
+N_WINDOW = 30
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -47,13 +47,13 @@ EXPANSION = 4
 T_NOISE = 1000        # noise schedule resolution
 
 # Training
-BATCH_SIZE = 8
+BATCH_SIZE = 64
 LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
-WARMUP_STEPS = 30
-ACTION_DROPOUT = 0.1
+WARMUP_STEPS = 200
+ACTION_DROPOUT = 0.2
 GRAD_CLIP = 10.0
 DTYPE = t.bfloat16
 
@@ -384,16 +384,10 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.6, n_cycles=2):
+def lr_lambda(step, max_steps, warmup_steps=200):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
-    post_warmup = max_steps - warmup_steps
-    cycle_length = post_warmup / n_cycles
-    cycle_step = (step - warmup_steps) % cycle_length
-    constant_end = int(constant_fraction * cycle_length)
-    if cycle_step < constant_end:
-        return 1.0
-    progress = float(cycle_step - constant_end) / float(max(1, cycle_length - constant_end))
+    progress = float(step - warmup_steps) / float(max(1, max_steps - warmup_steps))
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
@@ -579,8 +573,8 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 11000  # calibrated for ~10700 steps with N_WINDOW=15, BS=8, N_BLOCKS=5
-    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS, constant_fraction=0.7, n_cycles=2))
+    max_steps = 999999
+    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---
     print(f"Training for {TIME_BUDGET}s...")

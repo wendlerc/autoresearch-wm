@@ -51,8 +51,8 @@ BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
-WEIGHT_DECAY = 1e-4
-WARMUP_STEPS = 50
+WEIGHT_DECAY = 1e-5
+WARMUP_STEPS = 30
 ACTION_DROPOUT = 0.1
 GRAD_CLIP = 3.0
 DTYPE = t.bfloat16

@@ -384,13 +384,15 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=30, n_cycles=2):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.7):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
     post_warmup = max_steps - warmup_steps
-    cycle_len = post_warmup / n_cycles
-    progress_in_cycle = ((step - warmup_steps) % cycle_len) / cycle_len
-    return 0.5 * (1.0 + math.cos(math.pi * progress_in_cycle))
+    constant_end = warmup_steps + int(constant_fraction * post_warmup)
+    if step < constant_end:
+        return 1.0
+    progress = float(step - constant_end) / float(max(1, max_steps - constant_end))
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
 # =========================================================================
@@ -586,6 +588,12 @@ if __name__ == "__main__":
     t0_setup = time.time()
     t0_train = time.time()
 
+    # SWA: collect checkpoints during last 30% of training time
+    SWA_START_FRAC = 0.7
+    SWA_INTERVAL = 200
+    swa_states = []
+    swa_started = False
+
     while True:
         elapsed = time.time() - t0_train
         if elapsed >= TIME_BUDGET:
@@ -624,14 +632,40 @@ if __name__ == "__main__":
         running_loss = 0.9 * running_loss + 0.1 * loss.item() if step > 0 else loss.item()
         if step % 50 == 0:
             print(f"  step {step:5d} | loss {loss.item():.4f} | avg {running_loss:.4f} | {elapsed:.0f}s")
+
+        # SWA checkpoint collection
+        if not swa_started and elapsed >= SWA_START_FRAC * TIME_BUDGET:
+            swa_started = True
+            print(f"  SWA: starting collection at step {step}")
+        if swa_started and step % SWA_INTERVAL == 0:
+            swa_states.append({k: v.clone().cpu() for k, v in raw_model.state_dict().items()})
+            print(f"  SWA: saved checkpoint {len(swa_states)} at step {step}")
+
         step += 1
+
+    # Save final checkpoint for SWA
+    swa_states.append({k: v.clone().cpu() for k, v in raw_model.state_dict().items()})
+    print(f"  SWA: saved final checkpoint {len(swa_states)} at step {step}")
 
     training_seconds = time.time() - t0_train
     print(f"\nTraining done: {step} steps in {training_seconds:.1f}s")
 
     # --- Validation (outside time budget) ---
-    print("Computing validation loss...")
+    print("Computing validation loss (no SWA)...")
     t.cuda.empty_cache()
+    val_loss_raw = compute_val_loss(raw_model, val_loader, device, DTYPE)
+    print(f"  val_loss (no SWA): {val_loss_raw:.6f}")
+
+    # Apply SWA: average all collected checkpoints
+    if len(swa_states) >= 2:
+        print(f"Applying SWA with {len(swa_states)} checkpoints...")
+        avg_state = {}
+        for k in swa_states[0]:
+            avg_state[k] = sum(s[k] for s in swa_states) / len(swa_states)
+        raw_model.load_state_dict({k: v.to(device) for k, v in avg_state.items()})
+        del swa_states, avg_state
+
+    print("Computing validation loss (SWA)...")
     val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE)
     total_seconds = time.time() - t0_setup
     peak_vram = t.cuda.max_memory_allocated() / 1e6

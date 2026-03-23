@@ -51,7 +51,7 @@ BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
-WEIGHT_DECAY = 1e-5
+WEIGHT_DECAY = 1e-4
 WARMUP_STEPS = 50
 ACTION_DROPOUT = 0.1
 GRAD_CLIP = 3.0
@@ -609,7 +609,7 @@ if __name__ == "__main__":
 
         frames = frames[:, :N_WINDOW].to(device).to(DTYPE)
         actions = actions[:, :N_WINDOW].to(device)
-        ts = F.sigmoid(0.5 * t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
+        ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
 
         with t.autocast(device_type="cuda", dtype=DTYPE):
             z = t.randn_like(frames)

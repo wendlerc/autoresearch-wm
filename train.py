@@ -52,7 +52,7 @@ LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
-WARMUP_STEPS = 50
+WARMUP_STEPS = 30
 ACTION_DROPOUT = 0.1
 GRAD_CLIP = 3.0
 DTYPE = t.bfloat16
@@ -384,7 +384,7 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.2):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.7):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
     post_warmup = max_steps - warmup_steps
@@ -577,7 +577,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 5000
+    max_steps = 11000
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---
@@ -609,7 +609,14 @@ if __name__ == "__main__":
 
         frames = frames[:, :N_WINDOW].to(device).to(DTYPE)
         actions = actions[:, :N_WINDOW].to(device)
-        ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
+        # Stratified logit-normal noise sampling: uniform coverage of noise distribution
+        n_samples = frames.shape[0] * frames.shape[1]
+        strata = (t.arange(n_samples, device=device, dtype=t.float32) + t.rand(n_samples, device=device, dtype=t.float32)) / n_samples
+        strata = strata.clamp(1e-4, 1 - 1e-4)
+        normal_quantiles = t.erfinv(2 * strata - 1) * math.sqrt(2)
+        ts = t.sigmoid(normal_quantiles).to(DTYPE)
+        ts = ts[t.randperm(n_samples, device=device)]
+        ts = ts.reshape(frames.shape[0], frames.shape[1])
 
         with t.autocast(device_type="cuda", dtype=DTYPE):
             z = t.randn_like(frames)

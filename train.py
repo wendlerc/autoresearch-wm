@@ -49,7 +49,7 @@ T_NOISE = 1000        # noise schedule resolution
 # Training
 BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
-LR2 = 3e-4            # Adam lr for gains/biases/embeddings
+LR2 = 4e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 50

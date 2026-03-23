@@ -54,7 +54,7 @@ BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 30
 ACTION_DROPOUT = 0.1
-GRAD_CLIP = 10.0
+GRAD_CLIP = 3.0
 DTYPE = t.bfloat16
 
 # Data
@@ -578,7 +578,7 @@ if __name__ == "__main__":
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
     max_steps = 11000  # calibrated for ~10700 steps with N_WINDOW=15, BS=8, N_BLOCKS=5
-    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS, constant_fraction=0.7))
+    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS, constant_fraction=0.6))
 
     # --- Training ---
     print(f"Training for {TIME_BUDGET}s...")
@@ -615,13 +615,6 @@ if __name__ == "__main__":
 
         frames = frames[:, :N_WINDOW].to(device).to(DTYPE)
         actions = actions[:, :N_WINDOW].to(device)
-
-        # Horizontal flip augmentation (per-sample)
-        flip_mask = t.rand(frames.shape[0], device=device) < 0.5
-        if flip_mask.any():
-            frames[flip_mask] = frames[flip_mask].flip(-1)  # flip width
-            actions[flip_mask, :, -1] = -actions[flip_mask, :, -1]  # negate turn angle
-
         ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
 
         with t.autocast(device_type="cuda", dtype=DTYPE):
@@ -650,7 +643,6 @@ if __name__ == "__main__":
 
         step += 1
 
-    # Save final checkpoint for SWA
     swa_states.append({k: v.clone().cpu() for k, v in raw_model.state_dict().items()})
     print(f"  SWA: saved final checkpoint {len(swa_states)} at step {step}")
 
@@ -663,7 +655,6 @@ if __name__ == "__main__":
     val_loss_raw = compute_val_loss(raw_model, val_loader, device, DTYPE)
     print(f"  val_loss (no SWA): {val_loss_raw:.6f}")
 
-    # Apply SWA: average all collected checkpoints
     if len(swa_states) >= 2:
         print(f"Applying SWA with {len(swa_states)} checkpoints...")
         avg_state = {}

@@ -35,9 +35,9 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 12
+N_BLOCKS = 5
 PATCH_SIZE = 2
-N_WINDOW = 30
+N_WINDOW = 15
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -47,14 +47,14 @@ EXPANSION = 4
 T_NOISE = 1000        # noise schedule resolution
 
 # Training
-BATCH_SIZE = 64
+BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
-WARMUP_STEPS = 200
-ACTION_DROPOUT = 0.2
-GRAD_CLIP = 10.0
+WARMUP_STEPS = 50
+ACTION_DROPOUT = 0.1
+GRAD_CLIP = 3.0
 DTYPE = t.bfloat16
 
 # Data
@@ -80,6 +80,21 @@ class RMSNorm(nn.Module):
         return x / (((x**2).mean(dim=-1, keepdim=True) + 1e-6).sqrt()) * self.w
 
 
+class CosNetActivation(nn.Module):
+    """CosNet nonlinearity: σcos(h) = cos(ω2 ⊙ (s ⊙ cos(ω1 ⊙ h + ϕ1)) + ϕ2)
+    Uses diagonal scaling (s) instead of full mixing matrix M for efficiency."""
+    def __init__(self, dim):
+        super().__init__()
+        self.omega1 = nn.Parameter(t.ones(dim))
+        self.phi1 = nn.Parameter(t.zeros(dim))
+        self.scale = nn.Parameter(t.ones(dim))
+        self.omega2 = nn.Parameter(t.ones(dim))
+        self.phi2 = nn.Parameter(t.zeros(dim))
+
+    def forward(self, x):
+        return t.cos(self.omega2 * (self.scale * t.cos(self.omega1 * x + self.phi1)) + self.phi2)
+
+
 class GEGLU(nn.Module):
     def __init__(self, d_in, d_mid, d_out):
         super().__init__()
@@ -89,7 +104,7 @@ class GEGLU(nn.Module):
         self.up_gate.bias.data.zero_()
         self.down = nn.Linear(d_mid, d_out, bias=True)
         self.down.bias.data.zero_()
-        self.nonlin = nn.SiLU()
+        self.nonlin = CosNetActivation(d_mid)
 
     def forward(self, x):
         return self.down(self.up_proj(x) * self.nonlin(self.up_gate(x)))
@@ -384,10 +399,14 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.6):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
-    progress = float(step - warmup_steps) / float(max(1, max_steps - warmup_steps))
+    post_warmup = max_steps - warmup_steps
+    constant_end = warmup_steps + int(constant_fraction * post_warmup)
+    if step < constant_end:
+        return 1.0
+    progress = float(step - constant_end) / float(max(1, max_steps - constant_end))
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
@@ -573,7 +592,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 999999
+    max_steps = 11000
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---

@@ -290,25 +290,34 @@ def gate_fn(x, g):
     return x.reshape(b, s, d)
 
 
+def drop_path(x, drop_prob, training):
+    if not training or drop_prob == 0.:
+        return x
+    keep = 1. - drop_prob
+    mask = t.bernoulli(t.full((x.shape[0], 1, 1), keep, device=x.device, dtype=x.dtype))
+    return x * mask / keep
+
+
 class CausalBlock(nn.Module):
-    def __init__(self, d_model, expansion, n_heads, rope=None, use_flex=True):
+    def __init__(self, d_model, expansion, n_heads, rope=None, use_flex=True, drop_path_rate=0.0):
         super().__init__()
         self.norm1 = RMSNorm(d_model)
         self.selfattn = Attention(d_model, n_heads, rope=rope, use_flex=use_flex)
         self.norm2 = RMSNorm(d_model)
         self.geglu = GEGLU(d_model, expansion * d_model, d_model)
         self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(d_model, 6 * d_model, bias=True))
+        self.drop_path_rate = drop_path_rate
 
     def forward(self, z, cond, mask_self):
         mu1, sigma1, c1, mu2, sigma2, c2 = self.modulation(cond).chunk(6, dim=-1)
         residual = z
         z = modulate(self.norm1(z), mu1, sigma1)
         z = self.selfattn(z, mask=mask_self)
-        z = residual + gate_fn(z, c1)
+        z = residual + drop_path(gate_fn(z, c1), self.drop_path_rate, self.training)
         residual = z
         z = modulate(self.norm2(z), mu2, sigma2)
         z = self.geglu(z)
-        z = residual + gate_fn(z, c2)
+        z = residual + drop_path(gate_fn(z, c2), self.drop_path_rate, self.training)
         return z
 
 
@@ -330,9 +339,11 @@ class CausalDit(nn.Module):
         rope_tmax = N_WINDOW * self.toks_per_frame
         self.rope_seq = RoPE(self.d_head, rope_tmax, C=ROPE_C)
 
+        drop_rates = [0.1 * i / max(1, N_BLOCKS - 1) for i in range(N_BLOCKS)]
         self.blocks = nn.ModuleList([
-            CausalBlock(D_MODEL, EXPANSION, N_HEADS, rope=self.rope_seq, use_flex=True)
-            for _ in range(N_BLOCKS)
+            CausalBlock(D_MODEL, EXPANSION, N_HEADS, rope=self.rope_seq, use_flex=True,
+                        drop_path_rate=drop_rates[i])
+            for i in range(N_BLOCKS)
         ])
         self.patch = Patch(in_channels=IN_CHANNELS, out_channels=D_MODEL, patch_size=PATCH_SIZE)
         self.norm = RMSNorm(D_MODEL)

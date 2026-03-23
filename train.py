@@ -35,7 +35,7 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 6
+N_BLOCKS = 5
 PATCH_SIZE = 2
 N_WINDOW = 15
 IN_CHANNELS = 32
@@ -54,7 +54,7 @@ BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 50
 ACTION_DROPOUT = 0.1
-GRAD_CLIP = 10.0
+GRAD_CLIP = 3.0
 DTYPE = t.bfloat16
 
 # Data
@@ -384,7 +384,7 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.6):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.2):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
     post_warmup = max_steps - warmup_steps

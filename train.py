@@ -62,7 +62,7 @@ CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch-wm")
 DATA_DIR = os.path.join(CACHE_DIR, "data")
 FPS = 30
 DURATION = 1
-NUM_WORKERS = 8
+NUM_WORKERS = 4
 
 # Budget
 TIME_BUDGET = 600      # 10 minutes training
@@ -593,8 +593,8 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 11000
-    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda_time, max_steps=max_steps))
+    max_steps = 5000
+    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---
     print(f"Training for {TIME_BUDGET}s...")
@@ -603,7 +603,6 @@ if __name__ == "__main__":
     running_loss = 0.0
     t0_setup = time.time()
     t0_train = time.time()
-    _lr_t0 = t0_train  # set for time-based LR schedule
 
     # SWA: collect checkpoints during last 30% of training time
     SWA_START_FRAC = 0.7

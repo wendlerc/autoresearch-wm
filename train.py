@@ -588,9 +588,9 @@ if __name__ == "__main__":
     t0_setup = time.time()
     t0_train = time.time()
 
-    # SWA: collect checkpoints during last 15% of training (most converged)
-    SWA_START_FRAC = 0.85  # start collecting at 85% of training time
-    SWA_INTERVAL = 300     # save checkpoint every 300 steps after start
+    # SWA: collect checkpoints during last 30% of training
+    SWA_START_FRAC = 0.7  # start collecting at 70% of training time
+    SWA_INTERVAL = 500    # save checkpoint every 500 steps after start
     swa_states = []
     swa_started = False
 

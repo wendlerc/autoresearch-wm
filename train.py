@@ -35,9 +35,9 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 12
+N_BLOCKS = 5
 PATCH_SIZE = 2
-N_WINDOW = 30
+N_WINDOW = 15
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -47,14 +47,14 @@ EXPANSION = 4
 T_NOISE = 1000        # noise schedule resolution
 
 # Training
-BATCH_SIZE = 64
+BATCH_SIZE = 8
 LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
-WARMUP_STEPS = 200
-ACTION_DROPOUT = 0.2
-GRAD_CLIP = 10.0
+WARMUP_STEPS = 50
+ACTION_DROPOUT = 0.1
+GRAD_CLIP = 3.0
 DTYPE = t.bfloat16
 
 # Data
@@ -384,10 +384,14 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.6):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
-    progress = float(step - warmup_steps) / float(max(1, max_steps - warmup_steps))
+    post_warmup = max_steps - warmup_steps
+    constant_end = warmup_steps + int(constant_fraction * post_warmup)
+    if step < constant_end:
+        return 1.0
+    progress = float(step - constant_end) / float(max(1, max_steps - constant_end))
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
@@ -573,7 +577,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 999999
+    max_steps = 11000
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---
@@ -583,6 +587,12 @@ if __name__ == "__main__":
     running_loss = 0.0
     t0_setup = time.time()
     t0_train = time.time()
+
+    # SWA: collect checkpoints during last 30% of training
+    SWA_START_FRAC = 0.7  # start collecting at 70% of training time
+    SWA_INTERVAL = 500    # save checkpoint every 500 steps after start
+    swa_states = []
+    swa_started = False
 
     while True:
         elapsed = time.time() - t0_train
@@ -622,14 +632,41 @@ if __name__ == "__main__":
         running_loss = 0.9 * running_loss + 0.1 * loss.item() if step > 0 else loss.item()
         if step % 50 == 0:
             print(f"  step {step:5d} | loss {loss.item():.4f} | avg {running_loss:.4f} | {elapsed:.0f}s")
+
+        # SWA checkpoint collection
+        if not swa_started and elapsed >= SWA_START_FRAC * TIME_BUDGET:
+            swa_started = True
+            print(f"  SWA: starting collection at step {step}")
+        if swa_started and step % SWA_INTERVAL == 0:
+            swa_states.append({k: v.clone().cpu() for k, v in raw_model.state_dict().items()})
+            print(f"  SWA: saved checkpoint {len(swa_states)} at step {step}")
+
         step += 1
+
+    # Save final checkpoint for SWA
+    swa_states.append({k: v.clone().cpu() for k, v in raw_model.state_dict().items()})
+    print(f"  SWA: saved final checkpoint {len(swa_states)} at step {step}")
 
     training_seconds = time.time() - t0_train
     print(f"\nTraining done: {step} steps in {training_seconds:.1f}s")
 
     # --- Validation (outside time budget) ---
-    print("Computing validation loss...")
+    # First compute val loss without SWA for comparison
+    print("Computing validation loss (no SWA)...")
     t.cuda.empty_cache()
+    val_loss_raw = compute_val_loss(raw_model, val_loader, device, DTYPE)
+    print(f"  val_loss (no SWA): {val_loss_raw:.6f}")
+
+    # Apply SWA: average all collected checkpoints
+    if len(swa_states) >= 2:
+        print(f"Applying SWA with {len(swa_states)} checkpoints...")
+        avg_state = {}
+        for k in swa_states[0]:
+            avg_state[k] = sum(s[k] for s in swa_states) / len(swa_states)
+        raw_model.load_state_dict({k: v.to(device) for k, v in avg_state.items()})
+        del swa_states, avg_state
+
+    print("Computing validation loss (SWA)...")
     val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE)
     total_seconds = time.time() - t0_setup
     peak_vram = t.cuda.max_memory_allocated() / 1e6

@@ -36,7 +36,7 @@ from webdataset.filters import _shuffle
 D_MODEL = 384
 N_HEADS = 24
 N_BLOCKS = 5
-PATCH_SIZE = 4
+PATCH_SIZE = 2
 N_WINDOW = 15
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
@@ -395,6 +395,22 @@ def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.7):
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
+# Time-based LR schedule: adapts to actual throughput
+_lr_t0 = None  # set before training loop
+
+def lr_lambda_time(step, max_steps, warmup_frac=0.01, constant_frac=0.69):
+    global _lr_t0
+    if _lr_t0 is None:
+        return 1.0
+    elapsed_frac = min((time.time() - _lr_t0) / TIME_BUDGET, 1.0)
+    if elapsed_frac < warmup_frac:
+        return elapsed_frac / max(warmup_frac, 1e-6)
+    if elapsed_frac < warmup_frac + constant_frac:
+        return 1.0
+    progress = (elapsed_frac - warmup_frac - constant_frac) / max(1.0 - warmup_frac - constant_frac, 1e-6)
+    return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+
 # =========================================================================
 # WebDataset doom loader
 # =========================================================================
@@ -577,8 +593,8 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 20000
-    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
+    max_steps = 11000
+    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda_time, max_steps=max_steps))
 
     # --- Training ---
     print(f"Training for {TIME_BUDGET}s...")
@@ -587,10 +603,11 @@ if __name__ == "__main__":
     running_loss = 0.0
     t0_setup = time.time()
     t0_train = time.time()
+    _lr_t0 = t0_train  # set for time-based LR schedule
 
     # SWA: collect checkpoints during last 30% of training time
     SWA_START_FRAC = 0.7
-    SWA_INTERVAL = 500
+    SWA_INTERVAL = 200
     swa_states = []
     swa_started = False
 

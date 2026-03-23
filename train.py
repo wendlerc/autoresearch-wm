@@ -35,7 +35,7 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 6
+N_BLOCKS = 5
 PATCH_SIZE = 2
 N_WINDOW = 15
 IN_CHANNELS = 32
@@ -54,7 +54,7 @@ BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 50
 ACTION_DROPOUT = 0.1
-GRAD_CLIP = 10.0
+GRAD_CLIP = 3.0
 DTYPE = t.bfloat16
 
 # Data
@@ -577,7 +577,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 8000
+    max_steps = 11000
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---
@@ -609,7 +609,7 @@ if __name__ == "__main__":
 
         frames = frames[:, :N_WINDOW].to(device).to(DTYPE)
         actions = actions[:, :N_WINDOW].to(device)
-        ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
+        ts = F.sigmoid(0.5 * t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
 
         with t.autocast(device_type="cuda", dtype=DTYPE):
             z = t.randn_like(frames)

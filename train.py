@@ -54,7 +54,7 @@ BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
 WARMUP_STEPS = 30
 ACTION_DROPOUT = 0.1
-GRAD_CLIP = 3.0
+GRAD_CLIP = 10.0
 DTYPE = t.bfloat16
 
 # Data
@@ -578,7 +578,7 @@ if __name__ == "__main__":
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
     max_steps = 11000  # calibrated for ~10700 steps with N_WINDOW=15, BS=8, N_BLOCKS=5
-    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS, constant_fraction=0.6))
+    scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS, constant_fraction=0.7))
 
     # --- Training ---
     print(f"Training for {TIME_BUDGET}s...")
@@ -633,7 +633,6 @@ if __name__ == "__main__":
         if step % 50 == 0:
             print(f"  step {step:5d} | loss {loss.item():.4f} | avg {running_loss:.4f} | {elapsed:.0f}s")
 
-        # SWA checkpoint collection
         if not swa_started and elapsed >= SWA_START_FRAC * TIME_BUDGET:
             swa_started = True
             print(f"  SWA: starting collection at step {step}")

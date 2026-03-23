@@ -500,6 +500,40 @@ def iterate_doom(loader):
 
 
 # =========================================================================
+# Checkpoint management (top-K by val_loss)
+# =========================================================================
+
+CKPT_DIR = os.path.join(CACHE_DIR, "checkpoints")
+CKPT_TOP_K = 5
+
+def save_checkpoint(model, val_loss, step, agent_name="default"):
+    """Save checkpoint and keep only top-K best by val_loss."""
+    agent_dir = os.path.join(CKPT_DIR, agent_name)
+    os.makedirs(agent_dir, exist_ok=True)
+    # Save new checkpoint
+    fname = f"ckpt-step={step:06d}-val={val_loss:.6f}.pt"
+    path = os.path.join(agent_dir, fname)
+    state = model.state_dict() if not hasattr(model, '_orig_mod') else model._orig_mod.state_dict()
+    t.save({"model": state, "val_loss": val_loss, "step": step}, path)
+    print(f"  Saved checkpoint: {fname}")
+    # Prune to top-K
+    ckpts = sorted(Path(agent_dir).glob("ckpt-*.pt"))
+    if len(ckpts) > CKPT_TOP_K:
+        # Parse val_loss from filename, keep lowest
+        scored = []
+        for c in ckpts:
+            try:
+                vl = float(c.stem.split("val=")[1])
+                scored.append((vl, c))
+            except (IndexError, ValueError):
+                scored.append((float('inf'), c))
+        scored.sort(key=lambda x: x[0])
+        for _, c in scored[CKPT_TOP_K:]:
+            c.unlink()
+            print(f"  Pruned checkpoint: {c.name}")
+
+
+# =========================================================================
 # Validation
 # =========================================================================
 
@@ -631,6 +665,12 @@ if __name__ == "__main__":
     print("Computing validation loss...")
     t.cuda.empty_cache()
     val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE)
+
+    # --- Save checkpoint (top-K per agent) ---
+    import socket
+    agent_name = os.environ.get("AGENT_NAME", socket.gethostname())
+    save_checkpoint(model, val_loss, step, agent_name=agent_name)
+
     total_seconds = time.time() - t0_setup
     peak_vram = t.cuda.max_memory_allocated() / 1e6
 

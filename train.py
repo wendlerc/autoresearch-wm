@@ -52,9 +52,9 @@ LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 4e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
-WARMUP_STEPS = 30
+WARMUP_STEPS = 50
 ACTION_DROPOUT = 0.1
-GRAD_CLIP = 10.0
+GRAD_CLIP = 3.0
 DTYPE = t.bfloat16
 
 # Data
@@ -384,7 +384,7 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.7):
+def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.6):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
     post_warmup = max_steps - warmup_steps

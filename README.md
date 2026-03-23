@@ -1,5 +1,7 @@
 # autoresearch-wm
 
+![progress](progress.png)
+
 Autonomous world model research, adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
 Trains a causal diffusion transformer (DiT) on Doom latent frames using diffusion forcing. The model operates in DC-AE latent space (32x spatial compression, 32 channels) on pre-encoded PvP deathmatch gameplay.

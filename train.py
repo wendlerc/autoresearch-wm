@@ -391,7 +391,7 @@ def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.7):
     constant_end = warmup_steps + int(constant_fraction * post_warmup)
     if step < constant_end:
         return 1.0
-    progress = float(step - constant_end) / float(max(1, max_steps - constant_end))
+    progress = min(1.0, float(step - constant_end) / float(max(1, max_steps - constant_end)))
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
@@ -595,6 +595,24 @@ if __name__ == "__main__":
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
     max_steps = 5000
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
+
+    # --- Pre-compile warmup (moves compilation outside training budget) ---
+    print("Pre-compiling model...")
+    with t.no_grad():
+        dummy_z = t.randn(BATCH_SIZE, N_WINDOW, IN_CHANNELS, HEIGHT, WIDTH, device=device, dtype=DTYPE)
+        dummy_a = t.zeros(BATCH_SIZE, N_WINDOW, 15, device=device, dtype=DTYPE)
+        dummy_ts = t.ones(BATCH_SIZE, N_WINDOW, device=device, dtype=DTYPE) * 0.5
+        _ = model(dummy_z, dummy_a, dummy_ts)
+    # Trigger backward compilation
+    dummy_z2 = t.randn(BATCH_SIZE, N_WINDOW, IN_CHANNELS, HEIGHT, WIDTH, device=device, dtype=DTYPE)
+    dummy_ts2 = t.ones(BATCH_SIZE, N_WINDOW, device=device, dtype=DTYPE) * 0.5
+    with t.autocast(device_type="cuda", dtype=DTYPE):
+        vel_pred = model(dummy_z2, dummy_a, dummy_ts2)
+        dummy_loss = F.mse_loss(vel_pred, dummy_z2)
+    dummy_loss.backward()
+    optimizer.zero_grad()
+    t.cuda.empty_cache()
+    print("Pre-compilation done.")
 
     # --- Training ---
     print(f"Training for {TIME_BUDGET}s...")

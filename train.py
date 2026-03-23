@@ -586,7 +586,7 @@ if __name__ == "__main__":
 
     # --- Model ---
     model = CausalDit().to(device).to(DTYPE)
-    model = t.compile(model, mode='max-autotune')
+    model = t.compile(model)
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {num_params / 1e6:.1f}M params, dtype={DTYPE}")
 

@@ -384,15 +384,13 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
     return SingleDeviceMuonWithAuxAdam(param_groups)
 
 
-def lr_lambda(step, max_steps, warmup_steps=200, constant_fraction=0.7):
+def lr_lambda(step, max_steps, warmup_steps=30, n_cycles=2):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
     post_warmup = max_steps - warmup_steps
-    constant_end = warmup_steps + int(constant_fraction * post_warmup)
-    if step < constant_end:
-        return 1.0
-    progress = float(step - constant_end) / float(max(1, max_steps - constant_end))
-    return 0.5 * (1.0 + math.cos(math.pi * progress))
+    cycle_len = post_warmup / n_cycles
+    progress_in_cycle = ((step - warmup_steps) % cycle_len) / cycle_len
+    return 0.5 * (1.0 + math.cos(math.pi * progress_in_cycle))
 
 
 # =========================================================================
@@ -609,14 +607,7 @@ if __name__ == "__main__":
 
         frames = frames[:, :N_WINDOW].to(device).to(DTYPE)
         actions = actions[:, :N_WINDOW].to(device)
-        # Stratified logit-normal noise sampling: uniform coverage of noise distribution
-        n_samples = frames.shape[0] * frames.shape[1]
-        strata = (t.arange(n_samples, device=device, dtype=t.float32) + t.rand(n_samples, device=device, dtype=t.float32)) / n_samples
-        strata = strata.clamp(1e-4, 1 - 1e-4)
-        normal_quantiles = t.erfinv(2 * strata - 1) * math.sqrt(2)
-        ts = t.sigmoid(normal_quantiles).to(DTYPE)
-        ts = ts[t.randperm(n_samples, device=device)]
-        ts = ts.reshape(frames.shape[0], frames.shape[1])
+        ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
 
         with t.autocast(device_type="cuda", dtype=DTYPE):
             z = t.randn_like(frames)

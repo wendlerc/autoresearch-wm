@@ -37,7 +37,7 @@ D_MODEL = 384
 N_HEADS = 24
 N_BLOCKS = 6
 PATCH_SIZE = 2
-N_WINDOW = 10
+N_WINDOW = 15
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -577,7 +577,7 @@ if __name__ == "__main__":
     # --- Optimizer ---
     raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
     optimizer = get_muon(raw_model, LR1, LR2, BETAS, WEIGHT_DECAY)
-    max_steps = 12000
+    max_steps = 8000
     scheduler = t.optim.lr_scheduler.LambdaLR(optimizer, partial(lr_lambda, max_steps=max_steps, warmup_steps=WARMUP_STEPS))
 
     # --- Training ---

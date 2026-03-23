@@ -35,7 +35,7 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 384
 N_HEADS = 24
-N_BLOCKS = 5
+N_BLOCKS = 6
 PATCH_SIZE = 2
 N_WINDOW = 15
 IN_CHANNELS = 32
@@ -52,7 +52,7 @@ LR1 = 0.02            # Muon lr for body params (>=2D)
 LR2 = 3e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
 WEIGHT_DECAY = 1e-5
-WARMUP_STEPS = 30
+WARMUP_STEPS = 50
 ACTION_DROPOUT = 0.1
 GRAD_CLIP = 3.0
 DTYPE = t.bfloat16

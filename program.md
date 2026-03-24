@@ -24,6 +24,9 @@ You are an autonomous AI researcher optimizing a Doom world model. Your goal is 
 - The training budget is **1 hour** (3600 seconds). Exceeding this means failure.
 - Validation runs after training and does not count toward the budget.
 - Each experiment must produce a structured output block ending with `val_loss:` and other metrics.
+- **Everything in train.py is fair game**: model architecture, attention mechanism, normalization, optimizer, loss function, noise schedule, positional encodings, patching strategy — you can rewrite anything. Don't just tune hyperparameters.
+- **NEVER STOP**: Do not pause to ask the human. You are autonomous. If you run out of ideas, think harder — re-read train.py for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you.
+- **Simplicity criterion**: All else being equal, simpler is better. Removing code and getting equal or better results is a great outcome. A tiny improvement that adds ugly complexity is not worth it.
 
 ## Shared results log
 
@@ -98,20 +101,31 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 
 ## Ideas to explore
 
-Split these across agents — check the results log to see what's already covered:
+**Hyperparameter tuning alone will NOT win.** The current best is ~1.28 — to break through, you need structural changes. Think like a researcher, not a tuner.
 
-- Model size (depth, width, heads)
-- Learning rate schedules
-- Patch size and tokenization
-- Attention patterns
-- Noise schedules (currently logit-normal)
-- Action embedding design
-- Data augmentation
-- Optimizer hyperparameters
-- Context window length
-- Loss function variants
-- EMA / weight averaging
-- Gradient accumulation
+### Architecture changes (HIGH PRIORITY)
+- Wider model (d_model=512 or 768) instead of deeper
+- Different attention: linear attention, sliding window, local+global mix
+- Different FFN: SwiGLU, mixture of experts, deeper FFN
+- Skip connections across blocks (DenseNet-style)
+- Separate spatial and temporal attention (factorized)
+- Different patch sizes or multi-scale patches
+- Remove or redesign the register tokens
+
+### Training objective changes (HIGH PRIORITY)
+- v-prediction vs epsilon-prediction vs x-prediction
+- Different noise schedules (cosine, shifted cosine, uniform)
+- Min-SNR loss weighting
+- Progressive training (start with fewer frames, increase)
+- Masked prediction (randomly mask some frames)
+
+### Other ideas
+- Data augmentation (random crops, flips, temporal jitter)
+- Different optimizers (AdamW instead of Muon, or hybrid)
+- Gradient accumulation for larger effective batch
+- EMA of model weights
+- Learning rate warmup-cooldown variations
+- Action conditioning improvements
 
 ## Human-supplied ideas (GitHub Issues)
 

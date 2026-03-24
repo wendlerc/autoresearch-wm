@@ -82,21 +82,29 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 
 ## Experiment loop
 
-1. Read **both** shared logs:
+1. **Pull latest program.md** (it may have been updated by the human):
+   ```bash
+   REPO_ROOT="$(git worktree list | head -1 | awk '{print $1}')"
+   git -C "$REPO_ROOT" fetch origin multiagent 2>/dev/null
+   git -C "$REPO_ROOT" show origin/multiagent:program.md > /tmp/program_latest.md
+   diff -q "$REPO_ROOT/program.md" /tmp/program_latest.md >/dev/null 2>&1 || echo "*** program.md updated — re-read it! ***"
+   cat /tmp/program_latest.md
+   ```
+2. Read **both** shared logs:
    ```bash
    REPO_ROOT="$(git worktree list | head -1 | awk '{print $1}')"
    cat "$REPO_ROOT/results/results.tsv"
    cat "$REPO_ROOT/results/claims.tsv"
    ```
-2. Pick a change that **hasn't been tried AND isn't currently claimed** by another agent
-3. **Claim it** by appending to `results/claims.tsv` with status `started` (see Claim board section)
-4. Modify `train.py` in your worktree
-5. Commit with a descriptive message (include your agent name in the commit)
-6. Run: `uv run train.py 2>&1 | tee run.log`
-7. Extract results: `grep "^val_loss:" run.log`
-8. Log to `results/results.tsv` using `flock` (see Shared results log section)
-9. Mark claim as `done` in `results/claims.tsv`
-10. If `keep`: continue building on this. If `discard`: `git revert HEAD` and try something else.
+3. Pick a change that **hasn't been tried AND isn't currently claimed** by another agent
+4. **Claim it** by appending to `results/claims.tsv` with status `started` (see Claim board section)
+5. Modify `train.py` in your worktree
+6. Commit with a descriptive message (include your agent name in the commit)
+7. Run: `uv run train.py 2>&1 | tee run.log`
+8. Extract results: `grep "^val_loss:" run.log`
+9. Log to `results/results.tsv` using `flock` (see Shared results log section)
+10. Mark claim as `done` in `results/claims.tsv`
+11. If `keep`: continue building on this. If `discard`: `git revert HEAD` and try something else.
 11. Repeat indefinitely.
 
 ## Ideas to explore

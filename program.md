@@ -101,31 +101,32 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 
 ## Ideas to explore
 
-**Hyperparameter tuning alone will NOT win.** The current best is ~1.28 — to break through, you need structural changes. Think like a researcher, not a tuner.
+**Hyperparameter tuning alone will NOT win.** The current best is ~1.28 — to break through, you need structural changes. But **don't rewrite entire components** — make small, surgical tweaks to the existing architecture. One change at a time.
 
-### Architecture changes (HIGH PRIORITY)
-- Wider model (d_model=512 or 768) instead of deeper
-- Different attention: linear attention, sliding window, local+global mix
-- Different FFN: SwiGLU, mixture of experts, deeper FFN
-- Skip connections across blocks (DenseNet-style)
-- Separate spatial and temporal attention (factorized)
-- Different patch sizes or multi-scale patches
-- Remove or redesign the register tokens
+### Small architectural tweaks (HIGH PRIORITY — one at a time!)
+- Add a learnable scalar residual weight per block
+- Change normalization placement (pre-norm vs post-norm vs sandwich)
+- Try different activation in GEGLU (GeLU, ReLU², Mish)
+- Add a single extra skip connection (e.g. input residual to output)
+- Scale attention logits differently (e.g. 1/sqrt(d) vs learned scale)
+- Change expansion ratio in FFN (4x → 3x or 6x)
+- Wider model (d_model=512) with fewer blocks instead of deep+narrow
+- Remove register tokens and see if it helps
+- Different patch conv kernel sizes (3 instead of 5)
+- Add dropout or stochastic depth to blocks
 
-### Training objective changes (HIGH PRIORITY)
-- v-prediction vs epsilon-prediction vs x-prediction
-- Different noise schedules (cosine, shifted cosine, uniform)
-- Min-SNR loss weighting
-- Progressive training (start with fewer frames, increase)
-- Masked prediction (randomly mask some frames)
+### Training tweaks (HIGH PRIORITY)
+- Different noise schedules (cosine beta schedule, shifted logit-normal)
+- Loss weighting by noise level (min-SNR but with unweighted val)
+- Larger batch with gradient accumulation (if more steps per hour)
+- Progressive context: start with fewer frames, increase during training
+- Mixed precision strategies
 
-### Other ideas
-- Data augmentation (random crops, flips, temporal jitter)
-- Different optimizers (AdamW instead of Muon, or hybrid)
-- Gradient accumulation for larger effective batch
-- EMA of model weights
-- Learning rate warmup-cooldown variations
-- Action conditioning improvements
+### What NOT to do
+- Don't rewrite the entire attention mechanism from scratch
+- Don't replace the whole model architecture
+- Don't add huge new components (MoE, cross-attention, etc.)
+- Make ONE small change per experiment, measure, keep or revert
 
 ## Human-supplied ideas (GitHub Issues)
 

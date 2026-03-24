@@ -122,11 +122,10 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 - Progressive context: start with fewer frames, increase during training
 - Mixed precision strategies
 
-### What NOT to do
-- Don't rewrite the entire attention mechanism from scratch
-- Don't replace the whole model architecture
-- Don't add huge new components (MoE, cross-attention, etc.)
-- Make ONE small change per experiment, measure, keep or revert
+### Best practices
+- **Default to ONE small change per experiment**, measure, keep or revert
+- Larger rewrites are okay occasionally but start with small tweaks first — they're faster to iterate and easier to debug
+- If a big change fails, try extracting the smallest piece of it that might help
 
 ## Human-supplied ideas (GitHub Issues)
 

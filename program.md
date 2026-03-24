@@ -126,6 +126,8 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 - **Default to ONE small change per experiment**, measure, keep or revert
 - Larger rewrites are okay occasionally but start with small tweaks first — they're faster to iterate and easier to debug
 - If a big change fails, try extracting the smallest piece of it that might help
+- **Prototype big changes with TIME_BUDGET=600 (10 min)** first — faster iteration. Once it works, scale up to 3600.
+- Big architectural changes often have bugs on the first attempt. If a change regresses badly, **debug it** before discarding — the first failure may indicate a bug, not a bad idea. Check shapes, dtypes, gradient flow, etc.
 
 ## Human-supplied ideas (GitHub Issues)
 

@@ -127,7 +127,7 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 - Larger rewrites are okay occasionally but start with small tweaks first — they're faster to iterate and easier to debug
 - If a big change fails, try extracting the smallest piece of it that might help
 - **Prototype big changes with TIME_BUDGET=600 (10 min)** first — faster iteration. Once it works, scale up to 3600.
-- Big architectural changes often have bugs on the first attempt. If you have **high conviction** an idea should work (e.g. it's well-established in the literature), **debug it** before discarding — the first failure may indicate a bug, not a bad idea. To debug: look for the biggest problems in your implementation first (wrong shapes, broken gradient flow, numerical issues, missing normalization) and fix those.
+- Big architectural changes often have bugs on the first attempt. If you have **high conviction** an idea should work (e.g. it's well-established in the literature), **debug it** before discarding — the first failure may indicate a bug, not a bad idea. To debug: look for the biggest problems in your implementation first (wrong shapes, broken gradient flow, numerical issues, missing normalization) and fix those. Adding temporary instrumentation (gradient norms, activation stats, per-layer losses) can help diagnose issues.
 
 ## Human-supplied ideas (GitHub Issues)
 

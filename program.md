@@ -82,14 +82,12 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 
 ## Experiment loop
 
-1. **Pull latest program.md** (it may have been updated by the human):
+1. **Re-read the latest program.md** from the multiagent branch (the human may have updated it):
    ```bash
-   REPO_ROOT="$(git worktree list | head -1 | awk '{print $1}')"
-   git -C "$REPO_ROOT" fetch origin multiagent 2>/dev/null
-   git -C "$REPO_ROOT" show origin/multiagent:program.md > /tmp/program_latest.md
-   diff -q "$REPO_ROOT/program.md" /tmp/program_latest.md >/dev/null 2>&1 || echo "*** program.md updated — re-read it! ***"
-   cat /tmp/program_latest.md
+   git fetch origin multiagent 2>/dev/null
+   git show origin/multiagent:program.md
    ```
+   Always follow the latest version, even if your worktree has an older copy.
 2. Read **both** shared logs:
    ```bash
    REPO_ROOT="$(git worktree list | head -1 | awk '{print $1}')"

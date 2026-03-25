@@ -216,32 +216,36 @@ class Attention(nn.Module):
         self.rope = rope
         self.use_flex = use_flex
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, k_cache=None, v_cache=None):
         qkv = self.QKV(x)
-        q, k, v = qkv.chunk(3, dim=-1)
+        q, k_new, v_new = qkv.chunk(3, dim=-1)
         b, s, d = q.shape
         q = q.reshape(b, s, self.n_heads, self.d_head)
-        k = k.reshape(b, s, self.n_heads, self.d_head)
-        v = v.reshape(b, s, self.n_heads, self.d_head)
+        k_new = k_new.reshape(b, s, self.n_heads, self.d_head)
+        v_new = v_new.reshape(b, s, self.n_heads, self.d_head)
+        if k_cache is not None:
+            k = t.cat([k_cache, k_new], dim=1)
+            v = t.cat([v_cache, v_new], dim=1)
+            offset = k_cache.shape[1]
+        else:
+            k, v = k_new, v_new
+            offset = 0
         q = self.lnq(q).to(dtype=self.QKV.weight.dtype)
         k = self.lnk(k).to(dtype=self.QKV.weight.dtype)
         if self.rope is not None:
-            q = self.rope(q)
+            q = self.rope(q, offset=offset)
             k = self.rope(k)
-        if self.use_flex:
+        if self.use_flex and k_cache is None:
             q_f = q.permute(0, 2, 1, 3)
             k_f = k.permute(0, 2, 1, 3)
             v_f = v.permute(0, 2, 1, 3)
             z = flex_attention(q_f, k_f, v_f, scale=1., block_mask=mask) if mask is not None else flex_attention(q_f, k_f, v_f, scale=1.)
             z = z.permute(0, 2, 1, 3)
         else:
-            q, k, v = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
-            attn = q @ k.permute(0, 1, 3, 2)
-            if mask is not None:
-                attn = t.where(mask[:attn.shape[-2], :attn.shape[-1]], attn, float("-inf"))
-            z = attn.softmax(dim=-1) @ v
+            q_p, k_p, v_p = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
+            z = F.scaled_dot_product_attention(q_p, k_p, v_p, is_causal=(k_cache is None))
             z = z.permute(0, 2, 1, 3)
-        return self.O(z.reshape(b, s, d))
+        return self.O(z.reshape(b, s, d)), k_new, v_new
 
 
 # =========================================================================
@@ -299,17 +303,17 @@ class CausalBlock(nn.Module):
         self.geglu = GEGLU(d_model, expansion * d_model, d_model)
         self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(d_model, 6 * d_model, bias=True))
 
-    def forward(self, z, cond, mask_self):
+    def forward(self, z, cond, mask_self, cached_k=None, cached_v=None):
         mu1, sigma1, c1, mu2, sigma2, c2 = self.modulation(cond).chunk(6, dim=-1)
         residual = z
         z = modulate(self.norm1(z), mu1, sigma1)
-        z = self.selfattn(z, mask=mask_self)
+        z, k_new, v_new = self.selfattn(z, mask=mask_self, k_cache=cached_k, v_cache=cached_v)
         z = residual + gate_fn(z, c1)
         residual = z
         z = modulate(self.norm2(z), mu2, sigma2)
         z = self.geglu(z)
         z = residual + gate_fn(z, c2)
-        return z
+        return z, k_new, v_new
 
 
 class CausalDit(nn.Module):
@@ -349,7 +353,7 @@ class CausalDit(nn.Module):
             KV_LEN=self.toks_per_frame * N_WINDOW,
         )
 
-    def forward(self, z, actions, ts):
+    def forward(self, z, actions, ts, cached_k=None, cached_v=None):
         if ts.shape[1] == 1:
             ts = ts.repeat(1, z.shape[1])
         a = self.action_emb(actions)
@@ -359,12 +363,20 @@ class CausalDit(nn.Module):
         zr = t.cat((z, self.registers[None, None].repeat(z.shape[0], z.shape[1], 1, 1)), dim=2)
         batch, durzr, seqzr, d = zr.shape
         zr = zr.reshape(batch, -1, d)
-        for block in self.blocks:
-            zr = block(zr, cond, self.mask)
+        mask_self = None if cached_k is not None else self.mask
+        k_updates, v_updates = [], []
+        for bidx, block in enumerate(self.blocks):
+            ks = cached_k[bidx] if cached_k is not None else None
+            vs = cached_v[bidx] if cached_v is not None else None
+            zr, k_new, v_new = block(zr, cond, mask_self, cached_k=ks, cached_v=vs)
+            k_updates.append(k_new.unsqueeze(0))
+            v_updates.append(v_new.unsqueeze(0))
+        k_updates = t.cat(k_updates, dim=0)
+        v_updates = t.cat(v_updates, dim=0)
         mu, sigma = self.modulation(cond).chunk(2, dim=-1)
         zr = modulate(self.norm(zr), mu, sigma)
         zr = zr.reshape(batch, durzr, seqzr, d)
-        return self.unpatch(zr[:, :, :-N_REGISTERS])
+        return self.unpatch(zr[:, :, :-N_REGISTERS]), k_updates, v_updates
 
 
 # =========================================================================
@@ -534,6 +546,144 @@ def save_checkpoint(model, val_loss, step, agent_name="default"):
 
 
 # =========================================================================
+# KV Cache (simple, for AR eval)
+# =========================================================================
+
+class SimpleKVCache:
+    """Naive growing KV cache for AR inference."""
+    def __init__(self):
+        self.keys = None   # (n_layers, B, T, H, D)
+        self.values = None
+
+    def get(self):
+        return self.keys, self.values
+
+    def extend(self, k_new, v_new):
+        """k_new/v_new: (n_layers, B, T_new, H, D)"""
+        if self.keys is None:
+            self.keys = k_new
+            self.values = v_new
+        else:
+            self.keys = t.cat([self.keys, k_new], dim=2)
+            self.values = t.cat([self.values, v_new], dim=2)
+        # Keep only last (N_WINDOW-1) * toks_per_frame tokens
+        max_tokens = (N_WINDOW - 1) * ((HEIGHT // PATCH_SIZE) * (WIDTH // PATCH_SIZE) + N_REGISTERS)
+        if self.keys.shape[2] > max_tokens:
+            self.keys = self.keys[:, :, -max_tokens:]
+            self.values = self.values[:, :, -max_tokens:]
+
+    def reset(self):
+        self.keys = None
+        self.values = None
+
+
+# =========================================================================
+# Sampling (for AR eval)
+# =========================================================================
+
+@t.no_grad()
+def sample_one_frame(model, noise, action, n_steps=10, cache=None):
+    """Denoise one frame using Euler method. Returns (denoised, k_new, v_new)."""
+    ts = 1 - t.linspace(0, 1, n_steps + 1, device=noise.device, dtype=noise.dtype)
+    ts = 3 * ts / (2 * ts + 1)
+    z = noise.clone()
+    cached_k, cached_v = cache.get() if cache is not None else (None, None)
+    for i in range(len(ts)):
+        t_cond = ts[i].reshape(1, 1)
+        v_pred, k_new, v_new = model(z, action, t_cond, cached_k=cached_k, cached_v=cached_v)
+        if i < len(ts) - 1:
+            z = z + (ts[i] - ts[i + 1]) * v_pred
+    if cache is not None:
+        cache.extend(k_new, v_new)
+    return z
+
+
+def latent_psnr(pred, target):
+    """Compute PSNR on latent tensors."""
+    mse = F.mse_loss(pred.float(), target.float())
+    if mse == 0:
+        return 100.0
+    max_val = target.float().abs().max()
+    return (10 * t.log10(max_val ** 2 / mse)).item()
+
+
+# =========================================================================
+# AR Evaluation
+# =========================================================================
+
+@t.no_grad()
+def compute_ar_metrics(model, val_loader, device, dtype, n_clips=5, n_steps=10):
+    """Compute AR and TF PSNR on validation clips (latent space)."""
+    model.eval()
+    ar_psnrs, tf_psnrs = [], []
+    val_iter = iterate_doom(val_loader)
+
+    for _ in range(n_clips):
+        try:
+            frames, actions = next(val_iter)
+        except StopIteration:
+            val_iter = iterate_doom(val_loader)
+            frames, actions = next(val_iter)
+
+        frames = frames[:1, :N_WINDOW].to(device).to(dtype)  # single clip
+        actions = actions[:1, :N_WINDOW].to(device)
+        T_frames = frames.shape[1]
+        C, H, W = frames.shape[2], frames.shape[3], frames.shape[4]
+
+        # --- AR path: seed with GT frame 0, generate rest ---
+        ar_cache = SimpleKVCache()
+        # Seed: forward pass at t=0 with GT frame 0
+        gt0 = frames[:, :1]
+        a0 = t.zeros(1, 1, 15, device=device, dtype=dtype)
+        _, k0, v0 = model(gt0, a0, t.zeros(1, 1, device=device, dtype=dtype),
+                          cached_k=None, cached_v=None)
+        ar_cache.extend(k0, v0)
+
+        ar_frames = [gt0]
+        for tidx in range(1, T_frames):
+            noise = t.randn(1, 1, C, H, W, device=device, dtype=dtype)
+            pred = sample_one_frame(model, noise, actions[:, tidx:tidx+1],
+                                    n_steps=n_steps, cache=ar_cache)
+            ar_frames.append(pred)
+
+        ar_seq = t.cat(ar_frames, dim=1)  # (1, T, C, H, W)
+        ar_psnr = latent_psnr(ar_seq[:, 1:], frames[:, 1:])  # skip seeded frame 0
+        ar_psnrs.append(ar_psnr)
+
+        # --- TF path: denoise each frame with GT context ---
+        tf_cache = SimpleKVCache()
+        tf_psnr_frames = []
+        for tidx in range(T_frames):
+            if tidx == 0:
+                # Seed with GT
+                _, k0, v0 = model(frames[:, :1], a0, t.zeros(1, 1, device=device, dtype=dtype))
+                tf_cache.extend(k0, v0)
+            else:
+                noise = t.randn(1, 1, C, H, W, device=device, dtype=dtype)
+                pred = sample_one_frame(model, noise, actions[:, tidx:tidx+1],
+                                        n_steps=n_steps, cache=tf_cache)
+                psnr_val = latent_psnr(pred, frames[:, tidx:tidx+1])
+                tf_psnr_frames.append(psnr_val)
+                # Inject GT into cache (teacher forcing)
+                ck, cv = tf_cache.get()
+                _, k_gt, v_gt = model(frames[:, tidx:tidx+1], actions[:, tidx:tidx+1],
+                                       t.zeros(1, 1, device=device, dtype=dtype),
+                                       cached_k=ck, cached_v=cv)
+                # Replace last extend (from sample) with GT keys/values
+                tf_cache.keys = tf_cache.keys[:, :, :-k_gt.shape[2]]
+                tf_cache.values = tf_cache.values[:, :, :-v_gt.shape[2]]
+                tf_cache.extend(k_gt, v_gt)
+
+        tf_psnr = sum(tf_psnr_frames) / len(tf_psnr_frames) if tf_psnr_frames else 0
+        tf_psnrs.append(tf_psnr)
+
+    model.train()
+    ar_auto = sum(ar_psnrs) / len(ar_psnrs)
+    ar_tf = sum(tf_psnrs) / len(tf_psnrs)
+    return ar_auto, ar_tf, ar_tf - ar_auto
+
+
+# =========================================================================
 # Validation
 # =========================================================================
 
@@ -565,7 +715,7 @@ def compute_val_loss(model, val_loader, device, dtype):
             z = t.randn_like(frames)
             vel_true = frames - z
             x_t = frames - ts[:, :, None, None, None] * vel_true
-            vel_pred = model(x_t, actions, ts)
+            vel_pred, _, _ = model(x_t, actions, ts)
             loss = F.mse_loss(vel_pred.double(), vel_true.double())
         losses.append(loss.item())
     # Restore RNG state so val doesn't affect training
@@ -645,7 +795,7 @@ if __name__ == "__main__":
             z = t.randn_like(frames)
             vel_true = frames - z
             x_t = frames - ts[:, :, None, None, None] * vel_true
-            vel_pred = model(x_t, actions, ts)
+            vel_pred, _, _ = model(x_t, actions, ts)
             loss = F.mse_loss(vel_pred.double(), vel_true.double())
 
         loss.backward()
@@ -666,16 +816,23 @@ if __name__ == "__main__":
     t.cuda.empty_cache()
     val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE)
 
-    # --- Save checkpoint (top-K per agent) ---
+    print("Computing AR metrics (latent PSNR)...")
+    ar_auto_psnr, ar_tf_psnr, ar_gap = compute_ar_metrics(
+        raw_model, val_loader, device, DTYPE, n_clips=5, n_steps=10)
+
+    # --- Save checkpoint (top-K by ar_auto_psnr, higher is better) ---
     import socket
     agent_name = os.environ.get("AGENT_NAME", socket.gethostname())
-    save_checkpoint(model, val_loss, step, agent_name=agent_name)
+    save_checkpoint(model, -ar_auto_psnr, step, agent_name=agent_name)  # negate: lower file val = better
 
     total_seconds = time.time() - t0_setup
     peak_vram = t.cuda.max_memory_allocated() / 1e6
 
     # --- Structured output ---
     print(f"\n---")
+    print(f"ar_auto_psnr:      {ar_auto_psnr:.2f}")
+    print(f"ar_tf_psnr:        {ar_tf_psnr:.2f}")
+    print(f"ar_gap:            {ar_gap:.2f}")
     print(f"val_loss:          {val_loss:.6f}")
     print(f"training_seconds:  {training_seconds:.1f}")
     print(f"total_seconds:     {total_seconds:.1f}")

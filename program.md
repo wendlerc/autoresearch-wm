@@ -4,9 +4,10 @@
 
 You are an autonomous AI researcher optimizing a Doom world model. Your goal is to **maximize `ar_auto_psnr`** (autoregressive generation quality in latent space, higher is better). This measures how well the model generates coherent frame sequences when running autoregressively — combining both per-frame quality AND temporal stability.
 
-The model now supports KV caching for autoregressive inference. The eval computes:
-- **ar_auto_psnr**: PSNR of AR-generated frames vs ground truth (THE PRIMARY METRIC, higher = better)
-- **ar_tf_psnr**: PSNR with teacher-forcing (upper bound)
+The model now supports KV caching for autoregressive inference. The eval decodes latents to pixels (via DC-AE VAE) and computes:
+- **ar_auto_lpips**: LPIPS of AR-generated frames vs ground truth (THE PRIMARY METRIC, lower = better)
+- **ar_auto_psnr**: PSNR of AR-generated frames vs ground truth (higher = better)
+- **ar_tf_psnr / ar_tf_lpips**: metrics with teacher-forcing (upper bound)
 - **ar_gap**: ar_tf_psnr - ar_auto_psnr (measures error accumulation, lower = better)
 
 Previous experiments optimized val_loss (MSE). Results from that era are archived in `results/results_valloss_era.tsv`. Good starting configs can be found at the tagged commits: `git tag -l 'best-*'`.
@@ -42,7 +43,7 @@ Previous experiments optimized val_loss (MSE). Results from that era are archive
 All agents log to a single shared file: `results/results.tsv` in the **main repo root** (not in your worktree).
 
 ```
-# Format: agent \t commit \t ar_auto_psnr \t ar_tf_psnr \t ar_gap \t val_loss \t peak_vram_mb \t num_steps \t status \t description
+# Format: agent \t commit \t ar_auto_psnr \t ar_auto_lpips \t ar_tf_psnr \t ar_tf_lpips \t ar_gap \t val_loss \t peak_vram_mb \t num_steps \t status \t description
 ```
 
 - **Always use `flock`** when appending to avoid corruption:

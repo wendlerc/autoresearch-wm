@@ -602,89 +602,162 @@ def sample_one_frame(model, noise, action, n_steps=10, cache=None):
     return z
 
 
-def latent_psnr(pred, target):
-    """Compute PSNR on latent tensors."""
-    mse = F.mse_loss(pred.float(), target.float())
-    if mse == 0:
-        return 100.0
-    max_val = target.float().abs().max()
-    return (10 * t.log10(max_val ** 2 / mse)).item()
+# =========================================================================
+# VAE decoder + pixel metrics
+# =========================================================================
+
+_vae_cache = {}
+
+def _get_vae(device):
+    if device not in _vae_cache:
+        from diffusers.models.autoencoders.autoencoder_dc import AutoencoderDC
+        import glob
+        local = glob.glob("/tmp/dc-ae-cache/snapshots/*/")
+        model_path = local[0] if local else "mit-han-lab/dc-ae-lite-f32c32-sana-1.1-diffusers"
+        _vae_cache[device] = AutoencoderDC.from_pretrained(model_path, torch_dtype=t.float16).to(device).eval()
+    return _vae_cache[device]
+
+def _offload_vae(device):
+    vae = _vae_cache.pop(device, None)
+    if vae is not None:
+        vae.to("cpu")
+        _vae_cache["cpu"] = vae
+    t.cuda.empty_cache()
+
+def decode_latents_to_rgb(latents, device):
+    """Decode (B, T, 32, 16, 20) latents to (B, T, 3, H, W) float [0,1]."""
+    vae = _get_vae(device)
+    B, T, C, H, W = latents.shape
+    flat = latents.reshape(B * T, C, H, W).to(t.float16)
+    if flat.shape[-2] == 16:  # strip height padding
+        flat = flat[:, :, 1:, :]
+    frames = []
+    with t.no_grad():
+        for i in range(0, B * T, 8):
+            rgb = vae.decode(flat[i:i+8]).sample
+            rgb = (rgb.clamp(-1, 1) + 1) / 2  # to [0, 1]
+            frames.append(rgb.float())
+    return t.cat(frames, dim=0)[:B*T].reshape(B, T, 3, -1, rgb.shape[-1])
+
+def pixel_psnr(pred_rgb, target_rgb):
+    """PSNR on float [0,1] images. Returns scalar."""
+    mse = F.mse_loss(pred_rgb, target_rgb)
+    return (10 * t.log10(1.0 / mse.clamp(min=1e-10))).item()
+
+_lpips_net = None
+def pixel_lpips(pred_rgb, target_rgb):
+    """Mean LPIPS on float [0,1] images. Returns scalar (lower = more similar)."""
+    global _lpips_net
+    if _lpips_net is None:
+        import lpips
+        _lpips_net = lpips.LPIPS(net='alex', verbose=False).to(pred_rgb.device)
+    _lpips_net = _lpips_net.to(pred_rgb.device)
+    # LPIPS expects [-1, 1]
+    p = pred_rgb * 2 - 1
+    tgt = target_rgb * 2 - 1
+    with t.no_grad():
+        # Process frame by frame to save memory
+        dists = []
+        for i in range(p.shape[0]):
+            d = _lpips_net(p[i:i+1], tgt[i:i+1])
+            dists.append(d.item())
+    return sum(dists) / len(dists)
 
 
 # =========================================================================
-# AR Evaluation
+# AR Evaluation (pixel space)
 # =========================================================================
 
 @t.no_grad()
-def compute_ar_metrics(model, val_loader, device, dtype, n_clips=5, n_steps=10):
-    """Compute AR and TF PSNR on validation clips (latent space)."""
+def compute_ar_metrics(model, val_loader, device, dtype, n_clips=3, n_steps=10):
+    """Compute AR and TF metrics in pixel space (PSNR + LPIPS)."""
     model.eval()
-    ar_psnrs, tf_psnrs = [], []
+    ar_psnrs, ar_lpips_vals = [], []
+    tf_psnrs, tf_lpips_vals = [], []
     val_iter = iterate_doom(val_loader)
 
-    for _ in range(n_clips):
+    for clip_idx in range(n_clips):
         try:
             frames, actions = next(val_iter)
         except StopIteration:
             val_iter = iterate_doom(val_loader)
             frames, actions = next(val_iter)
 
-        frames = frames[:1, :N_WINDOW].to(device).to(dtype)  # single clip
+        frames = frames[:1, :N_WINDOW].to(device).to(dtype)
         actions = actions[:1, :N_WINDOW].to(device)
         T_frames = frames.shape[1]
         C, H, W = frames.shape[2], frames.shape[3], frames.shape[4]
 
-        # --- AR path: seed with GT frame 0, generate rest ---
+        # Decode GT to pixels
+        gt_rgb = decode_latents_to_rgb(frames, device)  # (1, T, 3, H, W)
+
+        # --- AR path ---
         ar_cache = SimpleKVCache()
-        # Seed: forward pass at t=0 with GT frame 0
-        gt0 = frames[:, :1]
         a0 = t.zeros(1, 1, 15, device=device, dtype=dtype)
-        _, k0, v0 = model(gt0, a0, t.zeros(1, 1, device=device, dtype=dtype),
-                          cached_k=None, cached_v=None)
+        _, k0, v0 = model(frames[:, :1], a0, t.zeros(1, 1, device=device, dtype=dtype))
         ar_cache.extend(k0, v0)
 
-        ar_frames = [gt0]
+        ar_latents = [frames[:, :1]]
         for tidx in range(1, T_frames):
             noise = t.randn(1, 1, C, H, W, device=device, dtype=dtype)
             pred = sample_one_frame(model, noise, actions[:, tidx:tidx+1],
                                     n_steps=n_steps, cache=ar_cache)
-            ar_frames.append(pred)
+            ar_latents.append(pred)
 
-        ar_seq = t.cat(ar_frames, dim=1)  # (1, T, C, H, W)
-        ar_psnr = latent_psnr(ar_seq[:, 1:], frames[:, 1:])  # skip seeded frame 0
+        ar_seq = t.cat(ar_latents, dim=1)
+        ar_rgb = decode_latents_to_rgb(ar_seq, device)
+
+        # Compute pixel metrics (skip frame 0 which is GT)
+        ar_psnr = pixel_psnr(ar_rgb[:, 1:].reshape(-1, *ar_rgb.shape[2:]),
+                             gt_rgb[:, 1:].reshape(-1, *gt_rgb.shape[2:]))
+        ar_lp = pixel_lpips(ar_rgb[:, 1:].reshape(-1, *ar_rgb.shape[2:]),
+                            gt_rgb[:, 1:].reshape(-1, *gt_rgb.shape[2:]))
         ar_psnrs.append(ar_psnr)
+        ar_lpips_vals.append(ar_lp)
 
-        # --- TF path: denoise each frame with GT context ---
+        # --- TF path ---
         tf_cache = SimpleKVCache()
-        tf_psnr_frames = []
-        for tidx in range(T_frames):
-            if tidx == 0:
-                # Seed with GT
-                _, k0, v0 = model(frames[:, :1], a0, t.zeros(1, 1, device=device, dtype=dtype))
-                tf_cache.extend(k0, v0)
-            else:
-                noise = t.randn(1, 1, C, H, W, device=device, dtype=dtype)
-                pred = sample_one_frame(model, noise, actions[:, tidx:tidx+1],
-                                        n_steps=n_steps, cache=tf_cache)
-                psnr_val = latent_psnr(pred, frames[:, tidx:tidx+1])
-                tf_psnr_frames.append(psnr_val)
-                # Inject GT into cache (teacher forcing)
-                ck, cv = tf_cache.get()
-                _, k_gt, v_gt = model(frames[:, tidx:tidx+1], actions[:, tidx:tidx+1],
-                                       t.zeros(1, 1, device=device, dtype=dtype),
-                                       cached_k=ck, cached_v=cv)
-                # Replace last extend (from sample) with GT keys/values
-                tf_cache.keys = tf_cache.keys[:, :, :-k_gt.shape[2]]
-                tf_cache.values = tf_cache.values[:, :, :-v_gt.shape[2]]
-                tf_cache.extend(k_gt, v_gt)
+        _, k0, v0 = model(frames[:, :1], a0, t.zeros(1, 1, device=device, dtype=dtype))
+        tf_cache.extend(k0, v0)
 
-        tf_psnr = sum(tf_psnr_frames) / len(tf_psnr_frames) if tf_psnr_frames else 0
+        tf_latents = [frames[:, :1]]
+        for tidx in range(1, T_frames):
+            noise = t.randn(1, 1, C, H, W, device=device, dtype=dtype)
+            pred = sample_one_frame(model, noise, actions[:, tidx:tidx+1],
+                                    n_steps=n_steps, cache=tf_cache)
+            tf_latents.append(pred)
+            # Inject GT into cache (teacher forcing) — remove sample's cache entry, add GT's
+            tf_cache.keys = tf_cache.keys[:, :, :-k0.shape[2]]
+            tf_cache.values = tf_cache.values[:, :, :-v0.shape[2]]
+            ck, cv = tf_cache.get()
+            _, k_gt, v_gt = model(frames[:, tidx:tidx+1], actions[:, tidx:tidx+1],
+                                   t.zeros(1, 1, device=device, dtype=dtype),
+                                   cached_k=ck, cached_v=cv)
+            tf_cache.extend(k_gt, v_gt)
+
+        tf_seq = t.cat(tf_latents, dim=1)
+        tf_rgb = decode_latents_to_rgb(tf_seq, device)
+
+        tf_psnr = pixel_psnr(tf_rgb[:, 1:].reshape(-1, *tf_rgb.shape[2:]),
+                             gt_rgb[:, 1:].reshape(-1, *gt_rgb.shape[2:]))
+        tf_lp = pixel_lpips(tf_rgb[:, 1:].reshape(-1, *tf_rgb.shape[2:]),
+                            gt_rgb[:, 1:].reshape(-1, *gt_rgb.shape[2:]))
         tf_psnrs.append(tf_psnr)
+        tf_lpips_vals.append(tf_lp)
+
+        print(f"  clip {clip_idx}: ar_psnr={ar_psnr:.1f} ar_lpips={ar_lp:.3f} | tf_psnr={tf_psnr:.1f} tf_lpips={tf_lp:.3f}")
+
+    # Offload VAE to free VRAM
+    _offload_vae(device)
 
     model.train()
-    ar_auto = sum(ar_psnrs) / len(ar_psnrs)
-    ar_tf = sum(tf_psnrs) / len(tf_psnrs)
-    return ar_auto, ar_tf, ar_tf - ar_auto
+    return {
+        'ar_auto_psnr': sum(ar_psnrs) / len(ar_psnrs),
+        'ar_tf_psnr': sum(tf_psnrs) / len(tf_psnrs),
+        'ar_gap': sum(tf_psnrs) / len(tf_psnrs) - sum(ar_psnrs) / len(ar_psnrs),
+        'ar_auto_lpips': sum(ar_lpips_vals) / len(ar_lpips_vals),
+        'ar_tf_lpips': sum(tf_lpips_vals) / len(tf_lpips_vals),
+    }
 
 
 # =========================================================================
@@ -820,23 +893,24 @@ if __name__ == "__main__":
     t.cuda.empty_cache()
     val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE)
 
-    print("Computing AR metrics (latent PSNR)...")
-    ar_auto_psnr, ar_tf_psnr, ar_gap = compute_ar_metrics(
-        raw_model, val_loader, device, DTYPE, n_clips=5, n_steps=10)
+    print("Computing AR metrics (pixel PSNR + LPIPS)...")
+    ar_metrics = compute_ar_metrics(raw_model, val_loader, device, DTYPE, n_clips=3, n_steps=10)
 
-    # --- Save checkpoint (top-K by ar_auto_psnr, higher is better) ---
+    # --- Save checkpoint (top-K by ar_auto_lpips, lower is better) ---
     import socket
     agent_name = os.environ.get("AGENT_NAME", socket.gethostname())
-    save_checkpoint(model, -ar_auto_psnr, step, agent_name=agent_name)  # negate: lower file val = better
+    save_checkpoint(model, ar_metrics['ar_auto_lpips'], step, agent_name=agent_name)
 
     total_seconds = time.time() - t0_setup
     peak_vram = t.cuda.max_memory_allocated() / 1e6
 
     # --- Structured output ---
     print(f"\n---")
-    print(f"ar_auto_psnr:      {ar_auto_psnr:.2f}")
-    print(f"ar_tf_psnr:        {ar_tf_psnr:.2f}")
-    print(f"ar_gap:            {ar_gap:.2f}")
+    print(f"ar_auto_psnr:      {ar_metrics['ar_auto_psnr']:.2f}")
+    print(f"ar_auto_lpips:     {ar_metrics['ar_auto_lpips']:.4f}")
+    print(f"ar_tf_psnr:        {ar_metrics['ar_tf_psnr']:.2f}")
+    print(f"ar_tf_lpips:       {ar_metrics['ar_tf_lpips']:.4f}")
+    print(f"ar_gap:            {ar_metrics['ar_gap']:.2f}")
     print(f"val_loss:          {val_loss:.6f}")
     print(f"training_seconds:  {training_seconds:.1f}")
     print(f"total_seconds:     {total_seconds:.1f}")

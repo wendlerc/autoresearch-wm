@@ -5,8 +5,10 @@ description = "Autonomous world model research"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "diffusers>=0.37.1",
     "einops>=0.8.1",
     "huggingface-hub>=1.0.1",
+    "lpips>=0.1.4",
     "matplotlib>=3.10.8",
     "muon-optimizer",
     "numpy>=2.2.6",

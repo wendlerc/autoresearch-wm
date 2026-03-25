@@ -1,1 +1,1 @@
-agent	commit	ar_auto_psnr	ar_tf_psnr	ar_gap	val_loss	peak_vram_mb	num_steps	status	description
+agent	commit	ar_auto_psnr	ar_auto_lpips	ar_tf_psnr	ar_tf_lpips	ar_gap	val_loss	peak_vram_mb	num_steps	status	description

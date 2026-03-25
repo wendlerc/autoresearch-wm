@@ -363,7 +363,11 @@ class CausalDit(nn.Module):
         zr = t.cat((z, self.registers[None, None].repeat(z.shape[0], z.shape[1], 1, 1)), dim=2)
         batch, durzr, seqzr, d = zr.shape
         zr = zr.reshape(batch, -1, d)
-        mask_self = None if cached_k is not None else self.mask
+        # Use flex mask only for full-window training; skip for single-frame or cached inference
+        if cached_k is not None or zr.shape[1] != self.toks_per_frame * N_WINDOW:
+            mask_self = None
+        else:
+            mask_self = self.mask
         k_updates, v_updates = [], []
         for bidx, block in enumerate(self.blocks):
             ks = cached_k[bidx] if cached_k is not None else None

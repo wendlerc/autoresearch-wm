@@ -550,6 +550,12 @@ def save_checkpoint(model, val_loss, step, agent_name="default"):
 
 
 # =========================================================================
+# >>> READ-ONLY BELOW THIS LINE — do NOT modify anything below <<<
+# The evaluation code (KV cache, sampling, VAE, metrics, AR eval) is fixed.
+# Only modify the model, training loop, and hyperparameters above.
+# =========================================================================
+
+# =========================================================================
 # KV Cache (simple, for AR eval)
 # =========================================================================
 

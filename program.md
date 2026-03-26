@@ -138,7 +138,11 @@ flock "$CLAIMS_FILE.lock" bash -c 'echo -e "AGENT\t$(date -Iseconds)\t'"$BASE_CO
 - Progressive context: start with fewer frames, increase during training
 - Mixed precision strategies
 
+### Hard constraints
+- **N_WINDOW must be >= 30** — shorter context windows hurt AR quality. Do not reduce below 30.
+
 ### Best practices
+- **Aim for high MFU (Model FLOPs Utilization)** — use most of the available 48 GB GPU memory. If your run uses <10 GB, you're leaving performance on the table. Scale up batch size, model width, depth, or context window to fill the GPU.
 - **Default to ONE small change per experiment**, measure, keep or revert
 - Larger rewrites are okay occasionally but start with small tweaks first — they're faster to iterate and easier to debug
 - If a big change fails, try extracting the smallest piece of it that might help

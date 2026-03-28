@@ -67,6 +67,13 @@ NUM_WORKERS = 8
 # Budget
 TIME_BUDGET = 3600     # 1 hour training
 
+
+def sample_noise_times(batch, seq, device, dtype):
+    """Sample diffusion noise times. Agents: modify this to change the noise schedule.
+    Used by both training and validation to ensure consistent evaluation."""
+    return F.sigmoid(t.randn(batch, seq, device=device, dtype=dtype))
+
+
 # =========================================================================
 # Neural network building blocks
 # =========================================================================
@@ -820,7 +827,7 @@ def compute_val_loss(model, val_loader, device, dtype):
         frames = frames[:, :N_WINDOW].to(device).to(dtype)
         actions = actions[:, :N_WINDOW].to(device)
         with t.autocast(device_type="cuda", dtype=dtype):
-            ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=dtype))
+            ts = sample_noise_times(frames.shape[0], frames.shape[1], device, dtype)
             z = t.randn_like(frames)
             vel_true = frames - z
             x_t = frames - ts[:, :, None, None, None] * vel_true
@@ -898,7 +905,7 @@ if __name__ == "__main__":
 
         frames = frames[:, :N_WINDOW].to(device).to(DTYPE)
         actions = actions[:, :N_WINDOW].to(device)
-        ts = F.sigmoid(t.randn(frames.shape[0], frames.shape[1], device=device, dtype=DTYPE))
+        ts = sample_noise_times(frames.shape[0], frames.shape[1], device, DTYPE)
 
         with t.autocast(device_type="cuda", dtype=DTYPE):
             z = t.randn_like(frames)

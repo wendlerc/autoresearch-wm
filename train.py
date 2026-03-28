@@ -674,13 +674,33 @@ def pixel_lpips(pred_rgb, target_rgb):
 # AR Evaluation (pixel space)
 # =========================================================================
 
+AR_EVAL_SEED = 2024     # deterministic clip selection + sampling noise
+
 @t.no_grad()
-def compute_ar_metrics(model, val_loader, device, dtype, n_clips=3, n_steps=10):
-    """Compute AR and TF metrics in pixel space (PSNR + LPIPS)."""
+def compute_ar_metrics(model, val_loader, device, dtype, n_clips=50, n_steps=10):
+    """Compute AR and TF metrics in pixel space (PSNR + LPIPS).
+
+    Fully deterministic: fixed seeds for clip selection, shuffling, and sampling noise.
+    Uses num_workers=0 loader to eliminate worker-level RNG variance.
+    """
     model.eval()
     ar_psnrs, ar_lpips_vals = [], []
     tf_psnrs, tf_lpips_vals = [], []
-    val_iter = iterate_doom(val_loader)
+
+    # Deterministic: fix ALL RNG sources
+    rng_state = t.random.get_rng_state()
+    cuda_rng_state = t.cuda.get_rng_state()
+    py_rng_state = random.getstate()
+    np_rng_state = np.random.get_state()
+    t.manual_seed(AR_EVAL_SEED)
+    t.cuda.manual_seed(AR_EVAL_SEED)
+    random.seed(AR_EVAL_SEED)
+    np.random.seed(AR_EVAL_SEED)
+
+    # Create a deterministic loader (num_workers=0 avoids worker-level seed variance)
+    val_urls = [str(p) for p in sorted(Path(DATA_DIR).glob("latent-*.tar"))[-1:]]
+    det_loader = get_doom_loader(val_urls, batch_size=1, num_workers=0)
+    val_iter = iterate_doom(det_loader)
 
     for clip_idx in range(n_clips):
         try:
@@ -752,6 +772,12 @@ def compute_ar_metrics(model, val_loader, device, dtype, n_clips=3, n_steps=10):
         tf_lpips_vals.append(tf_lp)
 
         print(f"  clip {clip_idx}: ar_psnr={ar_psnr:.1f} ar_lpips={ar_lp:.3f} | tf_psnr={tf_psnr:.1f} tf_lpips={tf_lp:.3f}")
+
+    # Restore all RNG states so eval doesn't affect training
+    t.random.set_rng_state(rng_state)
+    t.cuda.set_rng_state(cuda_rng_state)
+    random.setstate(py_rng_state)
+    np.random.set_state(np_rng_state)
 
     # Offload VAE to free VRAM
     _offload_vae(device)
@@ -899,8 +925,8 @@ if __name__ == "__main__":
     t.cuda.empty_cache()
     val_loss = compute_val_loss(raw_model, val_loader, device, DTYPE)
 
-    print("Computing AR metrics (pixel PSNR + LPIPS)...")
-    ar_metrics = compute_ar_metrics(raw_model, val_loader, device, DTYPE, n_clips=3, n_steps=10)
+    print("Computing AR metrics (pixel PSNR + LPIPS, 50 clips)...")
+    ar_metrics = compute_ar_metrics(raw_model, val_loader, device, DTYPE)
 
     # --- Save checkpoint (top-K by ar_auto_lpips, lower is better) ---
     import socket

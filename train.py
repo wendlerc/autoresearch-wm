@@ -603,25 +603,24 @@ def iterate_doom(loader):
 CKPT_DIR = os.path.join(CACHE_DIR, "checkpoints")
 CKPT_TOP_K = 5
 
-def save_checkpoint(model, val_loss, step, agent_name="default"):
-    """Save checkpoint and keep only top-K best by val_loss."""
+def save_checkpoint(model, ar_lpips, step, agent_name="default"):
+    """Save checkpoint and keep only top-K best by ar_auto_lpips."""
     agent_dir = os.path.join(CKPT_DIR, agent_name)
     os.makedirs(agent_dir, exist_ok=True)
     # Save new checkpoint
-    fname = f"ckpt-step={step:06d}-val={val_loss:.6f}.pt"
+    fname = f"ckpt-step={step:06d}-lpips={ar_lpips:.6f}.pt"
     path = os.path.join(agent_dir, fname)
     state = model.state_dict() if not hasattr(model, '_orig_mod') else model._orig_mod.state_dict()
-    t.save({"model": state, "val_loss": val_loss, "step": step}, path)
+    t.save({"model": state, "ar_lpips": ar_lpips, "step": step}, path)
     print(f"  Saved checkpoint: {fname}")
-    # Prune to top-K
-    ckpts = sorted(Path(agent_dir).glob("ckpt-*.pt"))
+    # Prune to top-K (only consider lpips= checkpoints, ignore legacy val= ones)
+    ckpts = sorted(Path(agent_dir).glob("ckpt-*-lpips=*.pt"))
     if len(ckpts) > CKPT_TOP_K:
-        # Parse val_loss from filename, keep lowest
         scored = []
         for c in ckpts:
             try:
-                vl = float(c.stem.split("val=")[1])
-                scored.append((vl, c))
+                lp = float(c.stem.split("lpips=")[1])
+                scored.append((lp, c))
             except (IndexError, ValueError):
                 scored.append((float('inf'), c))
         scored.sort(key=lambda x: x[0])

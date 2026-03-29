@@ -33,25 +33,35 @@ from webdataset.filters import _shuffle
 # ---------------------------------------------------------------------------
 
 # Architecture
-D_MODEL = 384
-N_HEADS = 24
-N_BLOCKS = 12
+D_MODEL = 512
+N_HEADS = 32
+N_BLOCKS = 7
 PATCH_SIZE = 2
 N_WINDOW = 30
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
 ROPE_C = 5000
+ROPE_TYPE = "vid"          # "1d" = sequential RoPE, "vid" = VidRoPE (x,y,t)
+ROPE_D_X = 6              # spatial-x dims (3 pairs)
+ROPE_D_Y = 4              # spatial-y dims (2 pairs)
+ROPE_D_T = 6              # temporal dims (3 pairs); sum must be <= d_head
+ROPE_C_X = 100
+ROPE_C_Y = 100
+ROPE_C_T = 100
+ROPE_FACTOR_X = 0.6283185 # 2*pi/10 (ctx_x)
+ROPE_FACTOR_Y = 0.7853982 # 2*pi/8  (ctx_y)
+ROPE_FACTOR_T = 0.6283185 # kt=3: 3*2*pi/30
 N_REGISTERS = 1
-EXPANSION = 4
+EXPANSION = 3
 T_NOISE = 1000        # noise schedule resolution
 
 # Training
-BATCH_SIZE = 64
-LR1 = 0.03            # Muon lr for body params (>=2D)
-LR2 = 5e-4            # Adam lr for gains/biases/embeddings
+BATCH_SIZE = 1
+LR1 = 0.01            # Muon lr for body params (>=2D)
+LR2 = 4e-4            # Adam lr for gains/biases/embeddings
 BETAS = (0.9, 0.95)
-WEIGHT_DECAY = 1e-5
+WEIGHT_DECAY = 0
 WARMUP_STEPS = 50
 ACTION_DROPOUT = 0.2
 GRAD_CLIP = 10.0
@@ -71,7 +81,7 @@ TIME_BUDGET = 3600     # 1 hour training
 def sample_noise_times(batch, seq, device, dtype):
     """Sample diffusion noise times. Agents: modify this to change the noise schedule.
     Used by both training and validation to ensure consistent evaluation."""
-    return F.sigmoid(t.randn(batch, seq, device=device, dtype=dtype))
+    return F.sigmoid(-1.0 + t.randn(batch, seq, device=device, dtype=dtype))
 
 
 # =========================================================================
@@ -120,8 +130,8 @@ class NumericEncoding(nn.Module):
 # RoPE
 # =========================================================================
 
-def compute_trig(d_head, n_ctx, C):
-    thetas = t.exp(-math.log(C) * t.arange(0, d_head, 2) / d_head)
+def compute_trig(d_head, n_ctx, C, factor=1.):
+    thetas = factor * t.exp(-math.log(C) * t.arange(0, d_head, 2) / d_head)
     thetas = thetas.repeat([2, 1]).T.flatten()
     positions = t.arange(n_ctx)
     all_thetas = positions.unsqueeze(1) * thetas.unsqueeze(0)
@@ -142,6 +152,62 @@ class RoPE(nn.Module):
         x_perm[:, :, :, even] = -x[:, :, :, odd]
         x_perm[:, :, :, odd] = x[:, :, :, even]
         return self.coss[:, offset:offset + x.shape[1]] * x + self.sins[:, offset:offset + x.shape[1]] * x_perm
+
+
+class VidRoPE(nn.Module):
+    """Video RoPE with separate spatial (x, y) and temporal (t) rotary embeddings."""
+    def __init__(self, d_head, d_x, d_y, d_t, ctx_x, ctx_y, ctx_t,
+                 C_x, C_y, C_t, toks_per_frame, n_registers,
+                 factor_x=1., factor_y=1., factor_t=1.):
+        super().__init__()
+        assert d_x + d_y + d_t <= d_head, f"dx + dy + dt > d_head"
+        self.d_head = d_head
+        self.d_x, self.d_y, self.d_t = d_x, d_y, d_t
+        self.toks_per_frame = toks_per_frame
+        self.n_registers = n_registers
+        sins_x, coss_x = compute_trig(d_x, ctx_x + 1, C_x, factor=factor_x)
+        self.register_buffer("sins_x", sins_x.unsqueeze(0).unsqueeze(2))
+        self.register_buffer("coss_x", coss_x.unsqueeze(0).unsqueeze(2))
+        sins_y, coss_y = compute_trig(d_y, ctx_y + 1, C_y, factor=factor_y)
+        self.register_buffer("sins_y", sins_y.unsqueeze(0).unsqueeze(2))
+        self.register_buffer("coss_y", coss_y.unsqueeze(0).unsqueeze(2))
+        sins_t, coss_t = compute_trig(d_t, ctx_t, C_t, factor=factor_t)
+        self.register_buffer("sins_t", sins_t.unsqueeze(0).unsqueeze(2))
+        self.register_buffer("coss_t", coss_t.unsqueeze(0).unsqueeze(2))
+        n_frames = ctx_t
+        pos_x = t.arange(ctx_x).repeat(ctx_y)
+        pos_x = t.cat([pos_x, t.tensor([ctx_x], dtype=t.int32)])
+        pos_x = pos_x.repeat(n_frames)
+        pos_y = t.arange(ctx_y).repeat_interleave(ctx_x)
+        pos_y = t.cat([pos_y, t.tensor([ctx_y], dtype=t.int32)])
+        pos_y = pos_y.repeat(n_frames)
+        pos_t = t.arange(n_frames).repeat_interleave(toks_per_frame)
+        self.register_buffer("pos_x", pos_x)
+        self.register_buffer("pos_y", pos_y)
+        self.register_buffer("pos_t", pos_t)
+        # Precompute even/odd indices for each dim to avoid dynamic arange in rotate
+        max_d = max(d_x, d_y, d_t)
+        self.register_buffer("_even", t.arange(0, max_d, 2))
+        self.register_buffer("_odd", t.arange(1, max_d, 2))
+
+    def rotate(self, x, pos_idcs, coss, sins):
+        d = x.shape[-1]
+        x_perm = t.empty(x.shape, device=x.device, dtype=x.dtype)
+        even, odd = self._even[:d // 2], self._odd[:d // 2]
+        x_perm[:, :, :, even] = -x[:, :, :, odd]
+        x_perm[:, :, :, odd] = x[:, :, :, even]
+        return coss[:, pos_idcs] * x + sins[:, pos_idcs] * x_perm
+
+    def forward(self, x, offset=0):
+        x = x.clone()
+        x[:, :, :, :self.d_x] = self.rotate(
+            x[:, :, :, :self.d_x], self.pos_x[:x.shape[1]], self.coss_x, self.sins_x)
+        x[:, :, :, self.d_x:self.d_x + self.d_y] = self.rotate(
+            x[:, :, :, self.d_x:self.d_x + self.d_y], self.pos_y[:x.shape[1]], self.coss_y, self.sins_y)
+        x[:, :, :, self.d_x + self.d_y:self.d_x + self.d_y + self.d_t] = self.rotate(
+            x[:, :, :, self.d_x + self.d_y:self.d_x + self.d_y + self.d_t],
+            self.pos_t[:x.shape[1]] + (offset // self.toks_per_frame), self.coss_t, self.sins_t)
+        return x
 
 
 # =========================================================================
@@ -338,8 +404,17 @@ class CausalDit(nn.Module):
         self.n_registers = N_REGISTERS
         self.toks_per_frame = (HEIGHT // PATCH_SIZE) * (WIDTH // PATCH_SIZE) + N_REGISTERS
 
-        rope_tmax = N_WINDOW * self.toks_per_frame
-        self.rope_seq = RoPE(self.d_head, rope_tmax, C=ROPE_C)
+        if ROPE_TYPE == "vid":
+            self.rope_seq = VidRoPE(
+                self.d_head, ROPE_D_X, ROPE_D_Y, ROPE_D_T,
+                WIDTH // PATCH_SIZE, HEIGHT // PATCH_SIZE, N_WINDOW,
+                ROPE_C_X, ROPE_C_Y, ROPE_C_T,
+                self.toks_per_frame, N_REGISTERS,
+                factor_x=ROPE_FACTOR_X, factor_y=ROPE_FACTOR_Y, factor_t=ROPE_FACTOR_T,
+            )
+        else:
+            rope_tmax = N_WINDOW * self.toks_per_frame
+            self.rope_seq = RoPE(self.d_head, rope_tmax, C=ROPE_C)
 
         self.blocks = nn.ModuleList([
             CausalBlock(D_MODEL, EXPANSION, N_HEADS, rope=self.rope_seq, use_flex=True)
@@ -410,8 +485,7 @@ def get_muon(model, lr1, lr2, betas, weight_decay):
 def lr_lambda(step, max_steps, warmup_steps=200):
     if step < warmup_steps:
         return float(step) / float(max(1, warmup_steps))
-    progress = float(step - warmup_steps) / float(max(1, max_steps - warmup_steps))
-    return 0.5 * (1.0 + math.cos(math.pi * progress))
+    return 1.0  # constant LR after warmup (Round 1 best)
 
 
 # =========================================================================

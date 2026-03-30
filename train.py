@@ -276,6 +276,8 @@ def create_block_causal_mask_mod(block_size):
     return block_causal_mask_mod
 
 
+ATTN_SCALE = 1.  # shared attention scale — used by both flex_attention and SDPA paths
+
 class Attention(nn.Module):
     def __init__(self, d_model, n_heads, rope=None, use_flex=True):
         super().__init__()
@@ -312,11 +314,11 @@ class Attention(nn.Module):
             q_f = q.permute(0, 2, 1, 3)
             k_f = k.permute(0, 2, 1, 3)
             v_f = v.permute(0, 2, 1, 3)
-            z = flex_attention(q_f, k_f, v_f, scale=1., block_mask=mask) if mask is not None else flex_attention(q_f, k_f, v_f, scale=1.)
+            z = flex_attention(q_f, k_f, v_f, scale=ATTN_SCALE, block_mask=mask) if mask is not None else flex_attention(q_f, k_f, v_f, scale=ATTN_SCALE)
             z = z.permute(0, 2, 1, 3)
         else:
             q_p, k_p, v_p = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
-            z = F.scaled_dot_product_attention(q_p, k_p, v_p, is_causal=(k_cache is None), scale=1.)
+            z = F.scaled_dot_product_attention(q_p, k_p, v_p, is_causal=(k_cache is None), scale=ATTN_SCALE)
             z = z.permute(0, 2, 1, 3)
         return self.O(z.reshape(b, s, d)), k_new, v_new
 

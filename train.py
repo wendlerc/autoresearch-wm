@@ -316,7 +316,7 @@ class Attention(nn.Module):
             z = z.permute(0, 2, 1, 3)
         else:
             q_p, k_p, v_p = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
-            z = F.scaled_dot_product_attention(q_p, k_p, v_p, is_causal=(k_cache is None))
+            z = F.scaled_dot_product_attention(q_p, k_p, v_p, is_causal=(k_cache is None), scale=1.)
             z = z.permute(0, 2, 1, 3)
         return self.O(z.reshape(b, s, d)), k_new, v_new
 

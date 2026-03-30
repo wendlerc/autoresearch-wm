@@ -35,7 +35,7 @@ from webdataset.filters import _shuffle
 # Architecture
 D_MODEL = 512
 N_HEADS = 32
-N_BLOCKS = 7
+N_BLOCKS = 8
 PATCH_SIZE = 2
 N_WINDOW = 30
 IN_CHANNELS = 32
@@ -43,9 +43,9 @@ HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
 ROPE_C = 5000
 ROPE_TYPE = "vid"          # "1d" = sequential RoPE, "vid" = VidRoPE (x,y,t)
-ROPE_D_X = 6              # spatial-x dims (3 pairs)
+ROPE_D_X = 4              # spatial-x dims (2 pairs) - reduced
 ROPE_D_Y = 4              # spatial-y dims (2 pairs)
-ROPE_D_T = 6              # temporal dims (3 pairs); sum must be <= d_head
+ROPE_D_T = 8              # temporal dims (4 pairs) - increased for better temporal modeling
 ROPE_C_X = 100
 ROPE_C_Y = 100
 ROPE_C_T = 100
@@ -428,6 +428,20 @@ class CausalDit(nn.Module):
         self.time_emb = NumericEncoding(dim=D_MODEL, n_max=T_NOISE)
         self.time_emb_mixer = nn.Linear(D_MODEL, D_MODEL)
         self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(D_MODEL, 2 * D_MODEL, bias=True))
+
+        # Better initialization (issues #4, #8):
+        # 1) Zero-init block modulation → each block starts as identity (DiT paper)
+        # 2) Scale residual output projections by 1/sqrt(2*N_BLOCKS) (GPT-2 style)
+        residual_scale = (2 * N_BLOCKS) ** -0.5
+        for block in self.blocks:
+            nn.init.zeros_(block.modulation[1].weight)
+            nn.init.zeros_(block.modulation[1].bias)
+            block.selfattn.O.weight.data *= residual_scale
+            block.geglu.down.weight.data *= residual_scale
+        # Zero-init final modulation too
+        nn.init.zeros_(self.modulation[1].weight)
+        nn.init.zeros_(self.modulation[1].bias)
+
         self.mask = create_block_mask(
             create_block_causal_mask_mod(self.toks_per_frame),
             B=None, H=None,

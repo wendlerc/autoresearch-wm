@@ -38,6 +38,7 @@ N_HEADS = 32
 N_BLOCKS = 7
 PATCH_SIZE = 2
 N_WINDOW = 30
+N_WINDOW_EVAL = 60     # AR eval clip length (2 seconds at 30fps)
 IN_CHANNELS = 32
 HEIGHT = 16           # latent height (padded from 15)
 WIDTH = 20            # latent width
@@ -73,6 +74,9 @@ DATA_DIR = os.path.join(CACHE_DIR, "data")
 FPS = 30
 DURATION = 1
 NUM_WORKERS = 8
+
+# Reproducibility
+SEED = 42              # training seed (set None to disable)
 
 # Budget
 TIME_BUDGET = 3600     # 1 hour training
@@ -569,8 +573,9 @@ def _log_and_continue(exn):
     return True
 
 
-def get_doom_loader(shard_urls, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS):
-    clip_len = FPS * DURATION + 1
+def get_doom_loader(shard_urls, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS, clip_len=None):
+    if clip_len is None:
+        clip_len = FPS * DURATION + 1
     shared_epoch = _SharedEpoch(0)
     clip_rng = random.Random(42)
     pipeline = [
@@ -781,7 +786,8 @@ def compute_ar_metrics(model, val_loader, device, dtype, n_clips=50, n_steps=10)
 
     # Create a deterministic loader (num_workers=0 avoids worker-level seed variance)
     val_urls = [str(p) for p in sorted(Path(DATA_DIR).glob("latent-*.tar"))[-1:]]
-    det_loader = get_doom_loader(val_urls, batch_size=1, num_workers=0)
+    eval_clip_len = N_WINDOW_EVAL + 1
+    det_loader = get_doom_loader(val_urls, batch_size=1, num_workers=0, clip_len=eval_clip_len)
     val_iter = iterate_doom(det_loader)
 
     for clip_idx in range(n_clips):
@@ -791,8 +797,8 @@ def compute_ar_metrics(model, val_loader, device, dtype, n_clips=50, n_steps=10)
             val_iter = iterate_doom(val_loader)
             frames, actions = next(val_iter)
 
-        frames = frames[:1, :N_WINDOW].to(device).to(dtype)
-        actions = actions[:1, :N_WINDOW].to(device)
+        frames = frames[:1, :N_WINDOW_EVAL].to(device).to(dtype)
+        actions = actions[:1, :N_WINDOW_EVAL].to(device)
         T_frames = frames.shape[1]
         C, H, W = frames.shape[2], frames.shape[3], frames.shape[4]
 
@@ -923,6 +929,14 @@ def compute_val_loss(model, val_loader, device, dtype):
 if __name__ == "__main__":
     t.backends.cuda.matmul.fp32_precision = "tf32"
     t.backends.cudnn.conv.fp32_precision = "tf32"
+
+    if SEED is not None:
+        t.manual_seed(SEED)
+        t.cuda.manual_seed_all(SEED)
+        random.seed(SEED)
+        np.random.seed(SEED)
+        t.backends.cudnn.deterministic = True
+        t.backends.cudnn.benchmark = False
 
     device = "cuda"
     assert t.cuda.is_available(), "CUDA required"
